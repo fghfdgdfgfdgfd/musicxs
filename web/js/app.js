@@ -20,15 +20,21 @@ const MB=(()=>{const NS="http://www.w3.org/2000/svg",reduce=matchMedia("(prefers
    requestAnimationFrame(tick)};requestAnimationFrame(tick)}
  return{watch}})();
 
-/* ---- چرخ ماوس روی ردیف (lookmv): هر «ژست» یا کاملاً افقی است یا کاملاً صفحه ---- */
+/* ---- چرخ ماوس روی ردیف (lookmv): هر «ژست» یا کاملاً افقی است یا کاملاً صفحه ----
+   - ژست جدید = بعد از ۵۰۰ms سکون. فقط در ابتدا/انتهای ردیف (در جهت اسکرول) به صفحه می‌رود.
+   - وسط یک ژست عمودی (حتی اگر زیر موس ردیف دیگری بیاید) ژست همان‌طور عمودی می‌ماند و ناگهان افقی نمی‌شود. */
+const WG={t:0,mode:null},WGAP=500;
 document.addEventListener("wheel",e=>{
- if(e.ctrlKey||!e.target.closest)return;const r=e.target.closest(".row");if(!r)return;
+ if(e.ctrlKey||!e.target.closest)return;
+ const now=performance.now(),r=e.target.closest(".row");
+ if(!r){WG.t=now;WG.mode="page";return}
  if(Math.abs(e.deltaX)>Math.abs(e.deltaY))return;
- const max=r.scrollWidth-r.clientWidth;if(max<2)return;
- const now=performance.now(),pos=Math.min(max,Math.abs(r.scrollLeft)),f=e.deltaY>0;
- /* ژست = رویدادهای نزدیک‌تر از 220ms (شامل اینرسی تاچ‌پد)؛ حالت فقط یک بار برای هر ژست تعیین می‌شود */
- if(now-(r._lw||0)>220){r._mode=(f?pos>=max-1:pos<=1)?"page":"row"}
- r._lw=now;
+ const max=r.scrollWidth-r.clientWidth;
+ if(max<2){WG.t=now;WG.mode="page";return}
+ if(WG.mode==="page"&&now-WG.t<=WGAP){WG.t=now;return}
+ const pos=Math.min(max,Math.abs(r.scrollLeft)),eff=r._t!=null?r._t:pos,f=e.deltaY>0;
+ if(now-(r._lw||0)>WGAP||WG.mode!=="row"||now-WG.t>WGAP){r._mode=(f?eff>=max-1:eff<=1)?"page":"row"}
+ r._lw=now;WG.t=now;WG.mode=r._mode;
  if(r._mode==="page"){r._t=undefined;return}
  e.preventDefault();
  const cur=r._t??pos;
@@ -150,7 +156,7 @@ function Screen({title,right,back,onBack,onDir,children,cls}){
  const[y,setY]=useState(0),last=useRef(0);
  const sc=e=>{const v=e.target.scrollTop;setY(v);if(v>90&&v>last.current+5)onDir(true);else if(v<last.current-5||v<40)onDir(false);last.current=v};
  return h("div",{className:"screen "+(cls||"")},
-  h("div",{className:"tb"},back?h("button",{className:"circ press",onClick:onBack,"aria-label":"Back"},Ic("back")):h("span"),
+  h("div",{className:"tb"},back?h("button",{className:"circ press",onClick:onBack,"aria-label":"Back"},Ic("back")):h(Support),
    h("div",{className:"st",style:{opacity:y>46?1:0,transform:y>46?"none":"translateY(8px)"}},title),right),
   h("div",{className:"scroll",onScroll:sc},h("h1",rs(0),title),children));
 }
@@ -173,14 +179,18 @@ const Loader=()=>h("div",{className:"list lw",role:"progressbar","aria-label":"L
 const MoreCard=(title,q,items,i)=>h("button",{key:"more",className:"card more press",style:{"--i":i},onClick:()=>ACT.more({title,q,seed:items}),"aria-label":"More "+title},
  h("div",{className:"cw"},h("div",{className:"art mt"},h("i",null,Ic("chev")),h("span",null,"More"))));
 const Row=(title,items,play,more)=>h(RV,{key:title},h("h2",null,title),h(RowBox,null,items.map((o,i)=>Card(o,i,play,items)),more&&MoreCard(title,more.q,items,items.length)));
+/* ردیف جدید با باز شدن نرم ارتفاع ظاهر می‌شود، تا بقیه‌ی صفحه ناگهان پایین نپرد (anim=false: بدون انیمیشن) */
+function Reveal({children,anim}){const[a,setA]=useState(!!anim);
+ return h("div",{className:"rcw"+(a?" go":""),onAnimationEnd:e=>{if(e.target===e.currentTarget)setA(false)}},h("div",{className:"rci"},children))}
 const Empty=t=>h("p",{className:"empty"},t);
 /* fetch JSON, keep it fresh: every = ms or fn(json)->ms */
 function useJSON(url,every,map,ck){
- const[d,setD]=useState(()=>{if(!ck)return null;try{const c=JSON.parse(localStorage.getItem(ck));return c?map(c):null}catch(e){return null}}),[err,setErr]=useState(false);
+ const last=useRef(null),[d,setD]=useState(()=>{if(!ck)return null;try{const raw=localStorage.getItem(ck),c=JSON.parse(raw);if(c){last.current=raw;return map(c)}return null}catch(e){return null}}),[err,setErr]=useState(false);
  useEffect(()=>{let stop=false,t;
   const load=async()=>{try{const r=await fetch(url);if(!r.ok)throw 0;const j=await r.json();if(stop)return;
-    if(ck)try{localStorage.setItem(ck,JSON.stringify(j))}catch(e){}
-    setD(map(j));setErr(false);t=setTimeout(load,typeof every==="function"?every(j):every)}
+    const str=JSON.stringify(j);
+    if(ck)try{localStorage.setItem(ck,str)}catch(e){}
+    if(str!==last.current){last.current=str;setD(map(j))}setErr(false);t=setTimeout(load,typeof every==="function"?every(j):every)}
    catch(e){if(!stop){setErr(true);t=setTimeout(load,15000)}}};
   load();return()=>{stop=true;clearTimeout(t)}},[url]);
  return[d,err]}
@@ -213,14 +223,15 @@ function MoreView({title,q,seed,play,cur,onClose,onDir}){
 
 const homeMap=j=>({...j,rows:(j.rows||[]).map(r=>({...r,tracks:r.tracks.map(reg)}))});
 function Home({play,onDir}){
- const[d,err]=useJSON("/api/home",j=>j.rows&&j.rows.length?5*60e3:8e3,homeMap,"ms_home_v1"),pls=usePL(),recs=useRecs(pls);
+ const[d,err]=useJSON("/api/home",j=>j.rows&&j.rows.length?5*60e3:8e3,homeMap,"ms_home_v1"),pls=usePL(),recs=useRecs(pls),seen=useRef(null);
+ if(!seen.current)seen.current=new Set(recs.map(r=>r.title));
  return h(Screen,{title:"Home",right:h(Av),onDir},
-  recs.map(r=>Row(r.title,r.tracks,play,{q:null})),
+  recs.map(r=>{const anim=!seen.current.has(r.title);seen.current.add(r.title);return h(Reveal,{key:"rec|"+r.title,anim},Row(r.title,r.tracks,play,{q:null}))}),
   d&&d.rows.map(r=>Row(r.title,r.tracks,play,{q:r.genre||null})),
   !d&&(err?Empty("Can’t reach the server. Retrying…"):h(Loader)),
   d&&!d.rows.length&&h(React.Fragment,null,Empty("Building Home for the first time… this takes a minute or two."),h(Loader)))}
 
-const radioMap=j=>(j.stations||[]).map(s=>reg({id:"r:"+s.id,t:s.name,a:s.genre,desc:s.desc,group:s.group,featured:s.featured,live:true,src:s.stream}));
+const radioMap=j=>(j.stations||[]).map(s=>reg({id:"r:"+s.id,t:s.name,a:s.genre,desc:s.desc,group:s.group,featured:s.featured,live:true,src:s.stream,cover:"/api/img/radio/"+encodeURIComponent(s.id)}));
 function Radio({play,onDir}){
  const[d,err]=useJSON("/api/radio",36e5,radioMap),feat=d?d.filter(s=>s.featured):[],groups=d?[...new Set(d.map(s=>s.group))]:[];
  return h(Screen,{title:"Radio",right:h(Av),onDir},
@@ -229,32 +240,47 @@ function Radio({play,onDir}){
   groups.map(g=>Row(g,d.filter(s=>s.group===g),play)))}
 
 /* Library is built from the tracks in the user's playlists */
-function LibList({kind,play,cur}){const pls=usePL(),seen={},songs=[];
- pls.forEach(p=>p.tracks.forEach(t=>{if(!seen[t.id]){seen[t.id]=1;songs.push(reg(t))}}));
+function LibList({kind,play,cur}){const pls=usePL(),songs=libSongs(pls),[mnode,openMenu]=useMenu(),rep=useRep();
  if(!songs.length)return h("div",{className:"list"},Empty("Songs you add to a playlist show up here."));
  if(kind==="Artists"){const m={};songs.forEach(o=>(m[o.a]=m[o.a]||[]).push(o));
-  return h("div",{className:"list"},Object.keys(m).sort().map((a,i)=>h("button",{key:a,className:"li press rise",style:{"--d":Math.min(i,12)},onClick:()=>play(m[a][0],m[a])},Art(m[a][0]),h("div",{className:"t"},h("b",null,a),h("small",null,m[a].length+(m[a].length===1?" song":" songs"))),Ic("more","ch"))))}
- return h("div",{className:"list"},songs.map((o,i)=>h("button",{key:o.id,className:"li press rise "+(cur&&cur.id===o.id?"on":""),style:{"--d":Math.min(i,12)},onClick:()=>play(o,songs)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a)),Ic("more","ch"))))}
+  return h("div",{className:"list"},Object.keys(m).sort().map((a,i)=>h("button",{key:a,className:"li press rise",style:{"--d":Math.min(i,12)},onClick:()=>play(m[a][0],m[a])},Art(m[a][0]),h("div",{className:"t"},h("b",null,a),h("small",null,m[a].length+(m[a].length===1?" song":" songs"))),Ic("chev","ch"))))}
+ return h("div",{className:"list"},songs.map((o,i)=>h("div",{key:o.id,className:"li rise"+(cur&&cur.id===o.id?" on":""),style:{"--d":Math.min(i,12)}},
+  h("button",{className:"main press",onClick:()=>play(o,songs)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a))),
+  rep===o.id&&Ic("repeat","rp"),
+  h("button",{className:"rm",onClick:e=>openMenu(e,trackMenu(o,songs,play,"Remove from Playlist",()=>{PL.removeEverywhere(o.id);ACT.note("Removed from playlist")})),"aria-label":"More","aria-haspopup":"menu"},Ic("more")))),mnode)}
 function Library({play,onDir,cur}){
- const[sub,setSub]=useState(null),[out,setOut]=useState(false);
- const close=()=>{setOut(true);setTimeout(()=>{setSub(null);setOut(false)},700)};
+ const[sub,setSub]=useState(null),[out,setOut]=useState(false),[plOpen,setPlOpen]=useState(null),[conf,setConf]=useState(null);
+ const pls=usePL(),songs=libSongs(pls),[mnode,openMenu]=useMenu(),openPl=pls.find(p=>p.id===plOpen);
+ const close=()=>{setOut(true);setTimeout(()=>{setSub(null);setOut(false);setPlOpen(null)},700)};
+ /* منوی سه‌نقطه‌ی بالا: Play All (نوبت‌به‌نوبت از اول) و حذف همه */
+ const playAll=l=>{if(!l.length)return;REP.set(null);play(l[0],l,true)};
+ const menuItems=()=>{
+  if(sub==="Playlists"&&openPl){const l=openPl.tracks.map(reg);
+   return[{icon:"play",label:"Play All",disabled:!l.length,fn:()=>playAll(l)},
+    {icon:"trash",label:"Remove All Songs",danger:1,disabled:!l.length,fn:()=>setConf({title:"Remove All Songs",text:"Remove all songs from “"+openPl.name+"”?",yes:"Remove All",fn:()=>{PL.clearTracks(openPl.id);ACT.note("Removed all songs")}})}]}
+  if(sub==="Playlists")return[{icon:"play",label:"Play All",disabled:!songs.length,fn:()=>playAll(songs)},
+   {icon:"trash",label:"Delete All Playlists",danger:1,disabled:!pls.length,fn:()=>setConf({title:"Delete All Playlists",text:"Delete all "+pls.length+" playlists? This can’t be undone.",yes:"Delete All",fn:()=>{PL.removeAll();setPlOpen(null);ACT.note("All playlists deleted")}})}];
+  return[{icon:"play",label:"Play All",disabled:!songs.length,fn:()=>playAll(songs)},
+   {icon:"trash",label:"Remove All",danger:1,disabled:!songs.length,fn:()=>setConf({title:"Remove All",text:"Remove all songs from your playlists? The playlists themselves stay.",yes:"Remove All",fn:()=>{PL.clearAllTracks();ACT.note("Removed all songs")}})}]};
  useEffect(()=>{if(sub)MB.watch(document.querySelector(".subs"),{k:.16,max:14,grace:300})},[sub,out]);
  const items=[["Playlists","list"],["Artists","mic"],["Songs","note"]];
  return h("div",{className:"screen"},
   h(Screen,{title:"Library",right:h(Av),onDir,cls:"inner"},h("div",{className:"list"},items.map((it,i)=>h("button",{key:i,className:"li press rise",style:{"--d":i+1},onClick:()=>setSub(it[0])},Ic(it[1],"r"),it[0],Ic("chev","ch"))))),
   sub&&h("div",{className:"screen subs",style:{background:"var(--bg)",animation:(out?"outR":"inR")+" .7s cubic-bezier(.32,.72,0,1) both",zIndex:8}},
-   h(Screen,{title:sub,back:1,onBack:close,right:h("div",{className:"circ"},Ic("more")),onDir,cls:"inner"},
-    sub==="Playlists"?h(PlaylistsView,{play,cur}):h(LibList,{kind:sub,play,cur}))))}
+   h(Screen,{title:sub,back:1,onBack:close,right:h("button",{className:"circ press",onClick:e=>openMenu(e,menuItems()),"aria-label":"More","aria-haspopup":"menu"},Ic("more")),onDir,cls:"inner"},
+    sub==="Playlists"?h(PlaylistsView,{play,cur,openId:plOpen,setOpenId:setPlOpen}):h(LibList,{kind:sub,play,cur}))),
+  mnode,conf&&h(Confirm,{title:conf.title,text:conf.text,yes:conf.yes,onYes:conf.fn,onClose:()=>setConf(null)}))}
 
 const GENRE_FALLBACK=[["Pop","pop"],["Hip-Hop","hip hop"],["Rock","rock"],["Indie","indie"],["Electronic","electronic"],["House","house"],["Techno","techno"],["Lo-Fi","lofi hip hop"],["Chill","chillout"],["Ambient","ambient"],["Jazz","jazz"],["Classical","classical piano"],["Metal","metal"],["R&B","r&b"],["Reggaeton","reggaeton"],["K-Pop","kpop"],["Persian Pop","persian pop"],["Persian Rap","persian rap"]];
-const genreMap=j=>(j.genres||[]).map((g,i,a)=>{const o={name:g.name,q:g.q,h:Math.round(i*360/a.length+8)%360,d:i+3,m:i%2};cover(o);return o});
+/* photo per genre (server: /api/img/genre/<name>); the generated SVG is kept underneath as a fallback while loading / if no photo */
+const genreMap=j=>(j.genres||[]).map((g,i,a)=>{const o={name:g.name,q:g.q,h:Math.round(i*360/a.length+8)%360,d:i+3,m:i%2};o.fb=cover(o);o.cover="/api/img/genre/"+encodeURIComponent(g.name);return o});
 function useGenres(){const[g,setG]=useState(()=>genreMap({genres:GENRE_FALLBACK.map(([name,q])=>({name,q}))}));
  useEffect(()=>{let off=false;fetch("/api/genres").then(r=>r.ok?r.json():null).then(j=>{if(!off&&j&&j.genres&&j.genres.length)setG(genreMap(j))}).catch(()=>{});return()=>{off=true}},[]);return g}
 function Search({play,onDir,cur}){const genres=useGenres(),[q,setQ]=useState(""),s=q.trim(),P=usePages(s.length>=2?s:"",null,true);
  return h(Screen,{title:"Search",right:h(Av),onDir},
   h("div",{className:"search rise",style:{"--d":1}},Ic("search"),h("input",{value:q,placeholder:"Artists, Songs…",onChange:e=>setQ(e.target.value)})),
   s.length>=2?(P.items.length?h(React.Fragment,null,TrackList(P.items,play,cur),h(PageMore,{P})):P.busy?h(Loader):P.err?Empty("Search failed. Check your connection and try again."):Empty("No results."))
-   :h("div",{className:"grid gens"},genres.map((g,i)=>h("button",{key:g.name,className:"gen press rise",style:{"--d":Math.min(i,10)+2,backgroundColor:`hsl(${g.h} 55% 30%)`,backgroundImage:cssUrl(g),backgroundSize:"cover"},onClick:()=>setQ(g.q)},h("span",null,g.name)))))}
+   :h("div",{className:"grid gens"},genres.map((g,i)=>h("button",{key:g.name,className:"gen press rise",style:{"--d":Math.min(i,10)+2,backgroundColor:`hsl(${g.h} 55% 30%)`,backgroundImage:cssUrl(g)+`,url("${g.fb}")`,backgroundSize:"cover"},onClick:()=>setQ(g.q)},h("span",null,g.name)))))}
 
 /* ---- کنترل صدا: موج‌های بلندگو با سطح صدا عوض می‌شوند، اسلایدر نرم و فنری است، حباب درصد، و قطع/وصل با محو شدن ---- */
 let VOL=.8;
@@ -310,7 +336,7 @@ function App(){
  const cr=useRef(null),Q=useRef([]);
  useEffect(()=>{au.onplay=()=>setPl(true);au.onpause=()=>setPl(false);const upd=()=>setTm({t:au.currentTime||0,d:durOf()});
   au.ontimeupdate=upd;au.onloadedmetadata=upd;au.ondurationchange=upd;au.onseeked=upd;
-  au.onended=()=>{if(cr.current&&!cr.current.live)go(1)};
+  au.onended=()=>{const c=cr.current;if(!c||c.live)return;if(REP.id===c.id){au.currentTime=0;au.play().catch(()=>{});return}go(1)};
   au.onerror=()=>{const c=cr.current;if(c&&!c.live&&PT.retry!==c.id){PT.retry=c.id;delete LINKS[c.id];startTrack(c);return}setPl(false);if(c)notify("Couldn’t play “"+c.t+"”")}},[]);
  useEffect(()=>()=>{au.pause()},[]);
  useEffect(()=>{ACT.pl=setPlFor;ACT.note=notify;ACT.more=setMore;return()=>{ACT.pl=()=>{};ACT.note=()=>{};ACT.more=()=>{}}});
@@ -326,9 +352,10 @@ function App(){
   try{ms.metadata=new MediaMetadata({title:cur.t,artist:cur.a,artwork:cur.cover?[{src:cur.cover,sizes:"500x500"}]:[]});
    ms.setActionHandler("previoustrack",()=>go(-1));ms.setActionHandler("nexttrack",()=>go(1))}catch(e){}},[cur]);
  /* play(track, list): list becomes the queue so Next/Previous walk the row you tapped in */
- function play(o,list){if(!o)return;
+ function play(o,list,force){if(!o)return;
   if(list&&list.length)Q.current=list;else if(!Q.current.some(x=>x.id===o.id))Q.current=[o];
-  if(cr.current&&cr.current.id===o.id){au.paused?au.play().catch(()=>{}):au.pause();return}
+  if(cr.current&&cr.current.id===o.id){if(force){au.currentTime=0;au.play().catch(()=>{})}else au.paused?au.play().catch(()=>{}):au.pause();return}
+  if(REP.id&&REP.id!==o.id)REP.set(null);
   cr.current=o;CUR.o=o;PT.retry=null;setCur(o);setTm({t:0,d:o.live?0:(o.dur||0)});startTrack(o)}
  function go(d){const q=Q.current;if(!q.length)return;const i=q.findIndex(x=>cr.current&&x.id===cr.current.id),n=q[((i<0?0:i)+d+q.length)%q.length];
   if(cr.current&&n.id===cr.current.id){au.currentTime=0;au.play().catch(()=>{})}else play(n)}

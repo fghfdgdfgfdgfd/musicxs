@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import covers, db, scraper
+from . import covers, db, images, scraper
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("app")
@@ -85,6 +85,7 @@ def scheduler():
 async def lifespan(_):
     db.init()
     threading.Thread(target=scheduler, daemon=True, name="scheduler").start()
+    threading.Thread(target=images.warm, args=(list(scraper.GENRES), STATIONS), daemon=True, name="photos").start()
     yield
 
 
@@ -169,6 +170,60 @@ def api_cover(tid: str):
 @app.get("/api/genres")
 def api_genres():
     return {"genres": [{"name": n, "q": q} for n, q in scraper.GENRES.items()]}
+
+
+def _photo(p, days):
+    if not p:
+        raise HTTPException(404, "no photo")
+    return FileResponse(p, media_type=images.media_type(p), headers={"Cache-Control": f"public, max-age={days * 86400}"})
+
+
+@app.get("/api/img/genre/{name}")
+def api_img_genre(name: str):
+    if name not in scraper.GENRES:
+        raise HTTPException(404, "unknown genre")
+    return _photo(images.genre(name), 30)
+
+
+@app.get("/api/img/radio/{sid}")
+def api_img_radio(sid: str):
+    st = next((x for x in STATIONS if x["id"] == sid), None)
+    if not st:
+        raise HTTPException(404, "unknown station")
+    return _photo(images.radio(st), 1)  # re-rolled weekly, so the browser re-checks daily
+
+
+# ---- live visitors: each browser pings every ~25s, whoever pinged in the last ONLINE_TTL seconds is "online" ----
+ONLINE_TTL = 90
+_online = {}
+_online_lock = threading.Lock()
+
+
+class Ping(BaseModel):
+    id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9-]+$")
+
+
+def _online_count(now):
+    for k in [k for k, t in _online.items() if now - t > ONLINE_TTL]:
+        del _online[k]
+    return len(_online)
+
+
+@app.post("/api/ping")
+def api_ping(p: Ping):
+    now = time.time()
+    with _online_lock:
+        if p.id in _online or len(_online) < 50000:
+            _online[p.id] = now
+        n = _online_count(now)
+    return JSONResponse({"online": max(1, n)}, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/leave")
+def api_leave(p: Ping):
+    with _online_lock:
+        _online.pop(p.id, None)
+    return Response(status_code=204)
 
 
 @app.get("/api/radio")
