@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -10,12 +11,12 @@ from contextlib import asynccontextmanager
 from datetime import date
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, scraper
+from . import covers, db, scraper
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("app")
@@ -57,6 +58,9 @@ def refresh_all():
 
         with ThreadPoolExecutor(3) as ex:
             list(ex.map(one, enumerate(rows)))
+        ids = db.home_track_ids()
+        covers.prefetch(ids)  # download every cover once; the browser then gets them from our disk
+        covers.prune(ids)
         db.meta_set("last_refresh", int(time.time()))
         db.meta_set("genre_day", day)
     finally:
@@ -139,11 +143,32 @@ def _http_iter(src):
 
 # ---------------------------------------------------------------- API
 @app.get("/api/home")
-def api_home():
+def api_home(request: Request):
+    """Served straight from the DB (rows + tracks + covers are already stored on the server).
+    ETag lets the browser revalidate for free: unchanged lists come back as an empty 304."""
     rows = db.home()
     last = int(db.meta_get("last_refresh", 0) or 0)
-    return JSONResponse({"rows": rows, "updated": last, "refreshing": _refreshing.is_set()},
-                        headers={"Cache-Control": "no-store"})
+    body = json.dumps({"rows": rows, "updated": last, "refreshing": _refreshing.is_set()}, separators=(",", ":"))
+    etag = '"' + hashlib.sha1(body.encode()).hexdigest()[:16] + '"'
+    hdr = {"ETag": etag, "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=hdr)
+    return Response(body, media_type="application/json", headers=hdr)
+
+
+@app.get("/api/cover/{tid}")
+def api_cover(tid: str):
+    if not (tid.isalnum() and len(tid) <= 32):
+        raise HTTPException(404)
+    if not covers.have(tid) and not covers.fetch(tid):
+        raise HTTPException(404, "no cover")
+    return FileResponse(covers.path(tid), media_type=covers.media_type(tid),
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.get("/api/genres")
+def api_genres():
+    return {"genres": [{"name": n, "q": q} for n, q in scraper.GENRES.items()]}
 
 
 @app.get("/api/radio")
@@ -151,25 +176,36 @@ def api_radio():
     return {"stations": STATIONS}
 
 
-_search_cache = {}
+_pools = {}  # query -> (expires, n requested, tracks): one big scrape, then pages are sliced from it
+PAGE = 20
+POOL_MAX = 100
 
 
 @app.get("/api/search")
-def api_search(q: str = Query(min_length=2, max_length=80)):
+def api_search(q: str = Query(min_length=2, max_length=80), offset: int = Query(0, ge=0, le=POOL_MAX)):
     q = " ".join(q.split()).lower()
-    hit = _search_cache.get(q)
-    if hit and hit[0] > time.time():
-        return {"tracks": hit[1]}
-    try:
-        ts = scraper.search(q, 20)
-    except Exception as e:
-        log.warning("search failed: %s", e)
-        raise HTTPException(502, "search failed")
-    db.save_tracks(ts)
-    if len(_search_cache) > 200:
-        _search_cache.clear()
-    _search_cache[q] = (time.time() + 600, ts)
-    return {"tracks": ts}
+    need = offset + PAGE
+    hit = _pools.get(q)
+    if hit and hit[0] > time.time() and (hit[1] >= need or hit[1] >= POOL_MAX):
+        n, ts = hit[1], hit[2]
+    else:
+        n = min(POOL_MAX, max(need + 8, 28))  # ask for a bit more than the page so the next "More" is often free
+        try:
+            ts = scraper.search(q, n)
+        except Exception as e:
+            log.warning("search failed: %s", e)
+            if hit:  # keep serving what we had
+                n, ts = hit[1], hit[2]
+            else:
+                raise HTTPException(502, "search failed")
+        else:
+            db.save_tracks(ts)
+            if len(_pools) > 200:
+                _pools.clear()
+            _pools[q] = (time.time() + 600, n, ts)
+    page = ts[offset:offset + PAGE]
+    return {"tracks": db.get_tracks([t["id"] for t in page]) if page else [],
+            "more": len(ts) > need or (n < POOL_MAX and bool(page))}
 
 
 class Seed(BaseModel):
@@ -214,17 +250,25 @@ def api_recommend(b: RecIn):
     return {"tracks": db.get_tracks(out[:20])}
 
 
+@app.get("/api/link/{tid}")
+def api_link(tid: str, u: str | None = None):
+    """The server only RESOLVES the direct CDN link; the browser fetches/plays the audio itself.
+    hls=true -> m3u8 playlist that the browser plays with hls.js (Safari plays it natively)."""
+    _, info = _need(tid, u)
+    return JSONResponse({"url": info["url"], "hls": not info["progressive"], "ext": info["ext"] if info["progressive"] else "mp3"},
+                        headers={"Cache-Control": "private, max-age=600"})
+
+
 @app.get("/api/stream/{tid}")
 def api_stream(tid: str, u: str | None = None):
+    """Legacy: plain redirect to the CDN link (no audio ever flows through this server)."""
     _, info = _need(tid, u)
-    if info["progressive"]:  # browser talks to SoundCloud's CDN directly: seeking just works
-        return RedirectResponse(info["url"], status_code=302, headers={"Cache-Control": "no-store"})
-    # only HLS offered: remux/transcode through ffmpeg (no seeking)
-    return StreamingResponse(_ffmpeg_iter(info["url"], info["acodec"].startswith("mp3")), media_type="audio/mpeg")
+    return RedirectResponse(info["url"], status_code=302, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/download/{tid}")
 def api_download(tid: str, u: str | None = None):
+    """Fallback only: the browser downloads progressive files straight from the CDN; this is used for HLS-only tracks."""
     url, info = _need(tid, u)
     t = db.get_track(tid) or {"t": "track", "a": "SoundCloud"}
     ext = info["ext"] if info["progressive"] else "mp3"

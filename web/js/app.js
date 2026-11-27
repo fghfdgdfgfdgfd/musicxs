@@ -60,6 +60,10 @@ addEventListener("pointerup",()=>{if(r)r.style.scrollSnapType="";r=null});
 document.addEventListener("click",e=>{if(m){e.stopPropagation();e.preventDefault();m=false}},true)})();
 
 const{useState,useEffect,useRef,useContext}=React,h=React.createElement;
+/* UI sounds (js/sfx.js): SFX("error") etc. Clicks, typing and scrolling are routed automatically inside sfx.js. */
+const SFX=(n,a,o)=>{try{window.sfx&&window.sfx.play(n,a,o)}catch(e){}};
+/* which cue a toast gets (click sounds already covered download / playlist toggles) */
+const toastSnd=m=>/^(Download started|Added to|Removed from|Account deleted)/.test(m)?null:/couldn|can’t|cannot|failed|incorrect|wrong|don’t match/i.test(m)?"error":/updated/i.test(m)?"success":"notify";
 const I={home:'<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
 radio:'<g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M8.6 8.6a5 5 0 0 0 0 6.8M15.4 8.6a5 5 0 0 1 0 6.8M5.7 5.7a9 9 0 0 0 0 12.6M18.3 5.7a9 9 0 0 1 0 12.6"/></g>',
 lib:'<rect x="3.5" y="9" width="17" height="12" rx="2.4"/><path d="M7 5h10M5.5 7h13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13.6 12v4a1.7 1.7 0 1 1-1.2-1.6v-3.2l3.4-.8v1.4z" fill="rgba(0,0,0,.85)"/>',
@@ -72,7 +76,10 @@ back:'<path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.
 more:'<circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/>',
 list:'<path d="M4 6h11M4 12h11M4 18h7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="18" cy="17" r="2.6"/>',
 mic:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-vol:'<path d="M4 9v6h4l5 4V5L8 9z"/>'};
+vol:'<path d="M4 9v6h4l5 4V5L8 9z"/>',
+volx:'<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 9.5l4.5 5M21 9.5l-4.5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+bm:'<path d="M7 4.5h10a1 1 0 0 1 1 1V20l-6-4.2L6 20V5.5a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>',
+dl:'<path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'};
 const Ic=(n,c)=>h("svg",{viewBox:"0 0 24 24",className:"ic "+(c||""),dangerouslySetInnerHTML:{__html:I[n]}});
 
 /* Every track the app has seen (from /api/*) lives here once, so object identity stays stable. */
@@ -82,7 +89,24 @@ function reg(o){const r=REG[o.id]||(REG[o.id]={});Object.assign(r,o);
  if(r.h==null){const x=hash(String(r.id));r.h=x%360;r.d=x%97+1;r.m=x>>3&1}
  if(!r.src)r.src="/api/stream/"+r.id+(r.url?"?u="+encodeURIComponent(r.url):"");
  return r}
-const au=new Audio();
+const au=new Audio();au.preload="auto";
+/* real duration if the browser knows it; streams report Infinity/NaN, so fall back to the length from the track's metadata */
+const durOf=()=>{const d=au.duration;if(isFinite(d)&&d>0)return d;const c=CUR.o;return c&&!c.live&&c.dur?c.dur:0};
+const CUR={o:null};
+/* ---- direct playback: the server only hands out the CDN link, the browser streams the audio itself ---- */
+const LINKS={},PT={n:0,retry:null};let HLS=null;
+const stopHls=()=>{if(HLS){try{HLS.destroy()}catch(e){}HLS=null}};
+async function linkOf(o){const c=LINKS[o.id];if(c&&Date.now()-c.t<15*60e3)return c;
+ const r=await fetch("/api/link/"+o.id+(o.url?"?u="+encodeURIComponent(o.url):""));if(!r.ok)throw new Error("link");
+ return LINKS[o.id]={...await r.json(),t:Date.now()}}
+function attach(l){stopHls();
+ if(!l.hls||au.canPlayType("application/vnd.apple.mpegurl")){au.src=l.url;return}
+ if(!(window.Hls&&Hls.isSupported()))throw new Error("no hls");
+ HLS=new Hls({maxBufferLength:30});HLS.loadSource(l.url);HLS.attachMedia(au);
+ HLS.on(Hls.Events.ERROR,(e,d)=>{if(d&&d.fatal&&au.onerror)au.onerror()})}
+function startTrack(o){const tok=++PT.n;stopHls();
+ if(o.live){au.src=o.src;au.play().catch(()=>{});return}
+ linkOf(o).then(l=>{if(tok!==PT.n)return;attach(l);return au.play()}).catch(()=>{if(tok===PT.n&&au.onerror)au.onerror()})}
 const grad=o=>`linear-gradient(145deg,hsl(${o.h} 62% 50%),hsl(${o.h+40} 55% 22%))`;
 const fmt=s=>isFinite(s)&&s>0?Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0"):"0:00";
 const rs=i=>({className:"rise",style:{"--d":i}});
@@ -135,33 +159,73 @@ const UserCtx=React.createContext(null);
 const ini=n=>Array.from(String(n||"").trim()).slice(0,2).join("").toUpperCase()||"?";
 function Av(){const c=useContext(UserCtx);
  return h("button",{className:"circ av",onClick:()=>c&&c.openMenu(),"aria-label":"Profile","aria-haspopup":"menu"},c&&c.user?ini(c.user.name):"?")}
-const Card=(o,i,play,list)=>h("button",{key:o.id,className:"card press",style:{"--i":i},onClick:()=>play(o,list)},Art(o),h("b",null,o.t),h("small",null,o.a));
-const Row=(title,items,play)=>h(RV,{key:title},h("h2",null,title),h(RowBox,null,items.map((o,i)=>Card(o,i,play,items))));
+/* hooks that App fills in: open the "Add to Playlist" dialog / show a toast */
+const ACT={pl:()=>{},note:()=>{},more:()=>{}};
+const halt=f=>e=>{e.stopPropagation();e.preventDefault();f()};
+const Card=(o,i,play,list)=>h("div",{key:o.id,className:"card press",role:"button",tabIndex:0,style:{"--i":i},onClick:()=>play(o,list),
+ onKeyDown:e=>{if(e.target===e.currentTarget&&(e.key==="Enter"||e.key===" ")){e.preventDefault();e.stopPropagation();play(o,list)}}},
+ h("div",{className:"cw"},Art(o),
+  !o.live&&h("button",{className:"ca bm",style:{"--k":0},"aria-label":"Add to playlist",title:"Add to playlist",onClick:halt(()=>ACT.pl(o))},Ic("bm")),
+  !o.live&&h("button",{className:"ca dl",style:{"--k":1},"aria-label":"Download",title:"Download",onClick:halt(()=>download(o).then(()=>ACT.note("Download started")).catch(()=>ACT.note("Couldn’t download this song")))},Ic("dl"))),
+ h("b",null,o.t),h("small",null,o.a));
+const Loader=()=>h("div",{className:"list lw",role:"progressbar","aria-label":"Loading"},h("div",{className:"lbar"},h("i")));
+/* last tile of a row: opens the full list (and keeps loading more from search) */
+const MoreCard=(title,q,items,i)=>h("button",{key:"more",className:"card more press",style:{"--i":i},onClick:()=>ACT.more({title,q,seed:items}),"aria-label":"More "+title},
+ h("div",{className:"cw"},h("div",{className:"art mt"},h("i",null,Ic("chev")),h("span",null,"More"))));
+const Row=(title,items,play,more)=>h(RV,{key:title},h("h2",null,title),h(RowBox,null,items.map((o,i)=>Card(o,i,play,items)),more&&MoreCard(title,more.q,items,items.length)));
 const Empty=t=>h("p",{className:"empty"},t);
 /* fetch JSON, keep it fresh: every = ms or fn(json)->ms */
-function useJSON(url,every,map){const[d,setD]=useState(null),[err,setErr]=useState(false);
+function useJSON(url,every,map,ck){
+ const[d,setD]=useState(()=>{if(!ck)return null;try{const c=JSON.parse(localStorage.getItem(ck));return c?map(c):null}catch(e){return null}}),[err,setErr]=useState(false);
  useEffect(()=>{let stop=false,t;
   const load=async()=>{try{const r=await fetch(url);if(!r.ok)throw 0;const j=await r.json();if(stop)return;
+    if(ck)try{localStorage.setItem(ck,JSON.stringify(j))}catch(e){}
     setD(map(j));setErr(false);t=setTimeout(load,typeof every==="function"?every(j):every)}
    catch(e){if(!stop){setErr(true);t=setTimeout(load,15000)}}};
   load();return()=>{stop=true;clearTimeout(t)}},[url]);
  return[d,err]}
 
+/* paged search results: first page, then "More" (server slices 20 at a time from a cached pool of up to 100) */
+function usePages(q,seed,auto){
+ const[s,setS]=useState({items:seed||[],busy:false,more:!!q,err:false}),R=useRef({off:0,gen:0,ctl:null});
+ const fetchPage=async reset=>{const r=R.current;if(reset){r.gen++;r.off=0}const gen=r.gen;
+  if(r.ctl)r.ctl.abort();const ctl=r.ctl=new AbortController();
+  setS(x=>({...x,busy:true,err:false,items:reset?(seed||[]):x.items}));
+  try{const res=await fetch("/api/search?q="+encodeURIComponent(q)+"&offset="+r.off,{signal:ctl.signal});if(!res.ok)throw 0;const j=await res.json();if(gen!==r.gen)return;
+   const t=j.tracks.map(reg);r.off+=20;
+   setS(x=>{const seen=new Set(x.items.map(o=>o.id));return{items:[...x.items,...t.filter(o=>!seen.has(o.id))],busy:false,more:!!j.more&&t.length>0,err:false}})}
+  catch(e){if(e&&e.name==="AbortError")return;if(gen===r.gen)setS(x=>({...x,busy:false,err:true}))}};
+ useEffect(()=>{const r=R.current;r.gen++;r.off=0;if(r.ctl)r.ctl.abort();
+  if(!q){setS({items:seed||[],busy:false,more:false,err:false});return}
+  if(auto){setS({items:[],busy:true,more:false,err:false});const t=setTimeout(()=>fetchPage(true),450);return()=>{clearTimeout(t);if(r.ctl)r.ctl.abort()}}
+  setS({items:seed||[],busy:false,more:true,err:false});return()=>{if(r.ctl)r.ctl.abort()}},[q]);
+ return{...s,load:()=>fetchPage(false)}}
+const TrackList=(items,play,cur)=>h("div",{className:"list"},items.map((o,i)=>h("button",{key:o.id,className:"li press rise"+(cur&&cur.id===o.id?" on":""),style:{"--d":Math.min(i%20,12)},onClick:()=>play(o,items)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a)))));
+const PageMore=({P})=>P.busy?h(Loader):P.err?h("div",{className:"list"},h("button",{className:"morebtn press",onClick:P.load},"Couldn’t load. Tap to retry")):P.more&&P.items.length?h("div",{className:"list"},h("button",{className:"morebtn press",onClick:P.load},"More")):null;
+function MoreView({title,q,seed,play,cur,onClose,onDir}){
+ const[out,setOut]=useState(false),P=usePages(q,seed,false);
+ const close=()=>{setOut(true);setTimeout(onClose,700)};
+ useEffect(()=>{const k=e=>{if(e.key==="Escape")close()};document.addEventListener("keydown",k);return()=>document.removeEventListener("keydown",k)},[]);
+ return h("div",{className:"screen subs",style:{background:"var(--bg)",animation:(out?"outR":"inR")+" .7s cubic-bezier(.32,.72,0,1) both",zIndex:8}},
+  h(Screen,{title,back:1,onBack:close,right:h(Av),onDir,cls:"inner"},
+   P.items.length?TrackList(P.items,play,cur):(P.busy?null:Empty("Nothing here yet.")),
+   h(PageMore,{P})))}
+
 const homeMap=j=>({...j,rows:(j.rows||[]).map(r=>({...r,tracks:r.tracks.map(reg)}))});
 function Home({play,onDir}){
- const[d,err]=useJSON("/api/home",j=>j.rows&&j.rows.length?5*60e3:8e3,homeMap),pls=usePL(),recs=useRecs(pls);
+ const[d,err]=useJSON("/api/home",j=>j.rows&&j.rows.length?5*60e3:8e3,homeMap,"ms_home_v1"),pls=usePL(),recs=useRecs(pls);
  return h(Screen,{title:"Home",right:h(Av),onDir},
-  recs.map(r=>Row(r.title,r.tracks,play)),
-  d&&d.rows.map(r=>Row(r.title,r.tracks,play)),
-  !d&&Empty(err?"Can’t reach the server. Retrying…":"Loading…"),
-  d&&!d.rows.length&&Empty("Building Home for the first time… this takes a minute or two."))}
+  recs.map(r=>Row(r.title,r.tracks,play,{q:null})),
+  d&&d.rows.map(r=>Row(r.title,r.tracks,play,{q:r.genre||null})),
+  !d&&(err?Empty("Can’t reach the server. Retrying…"):h(Loader)),
+  d&&!d.rows.length&&h(React.Fragment,null,Empty("Building Home for the first time… this takes a minute or two."),h(Loader)))}
 
 const radioMap=j=>(j.stations||[]).map(s=>reg({id:"r:"+s.id,t:s.name,a:s.genre,desc:s.desc,group:s.group,featured:s.featured,live:true,src:s.stream}));
 function Radio({play,onDir}){
  const[d,err]=useJSON("/api/radio",36e5,radioMap),feat=d?d.filter(s=>s.featured):[],groups=d?[...new Set(d.map(s=>s.group))]:[];
  return h(Screen,{title:"Radio",right:h(Av),onDir},
-  !d&&Empty(err?"Can’t load stations. Retrying…":"Loading…"),
-  feat.length>0&&h("section",rs(1),h("h2",null,"Listen to Live Radio for Free"),h(RowBox,null,feat.map(o=>h("button",{key:o.id,className:"live press",style:{"--g":grad(o)},onClick:()=>play(o,feat)},h("small",null,"LIVE · "+o.a),h("b",null,o.t),h("p",null,o.desc))))),
+  !d&&(err?Empty("Can’t load stations. Retrying…"):h(Loader)),
+  feat.length>0&&h("section",rs(1),h("h2",null,"Listen to Live Radio for Free"),h(RowBox,null,feat.map(o=>h("button",{key:o.id,className:"live press",style:{"--g":grad(o),"--cv":cssUrl(o)},onClick:()=>play(o,feat)},h("small",null,"LIVE · "+o.a),h("b",null,o.t),h("p",null,o.desc))))),
   groups.map(g=>Row(g,d.filter(s=>s.group===g),play)))}
 
 /* Library is built from the tracks in the user's playlists */
@@ -182,17 +246,15 @@ function Library({play,onDir,cur}){
    h(Screen,{title:sub,back:1,onBack:close,right:h("div",{className:"circ"},Ic("more")),onDir,cls:"inner"},
     sub==="Playlists"?h(PlaylistsView,{play,cur}):h(LibList,{kind:sub,play,cur}))))}
 
-const GENRE_TILES=["Pop","Rock","Chill","Electronic","Hip-Hop","Jazz","Lo-Fi","Persian"];
-function Search({play,onDir}){const[q,setQ]=useState(""),[res,setRes]=useState(null),[busy,setBusy]=useState(false);
- useEffect(()=>{const s=q.trim();if(s.length<2){setRes(null);setBusy(false);return}
-  setBusy(true);const ctl=new AbortController();
-  const t=setTimeout(async()=>{try{const r=await fetch("/api/search?q="+encodeURIComponent(s),{signal:ctl.signal});if(!r.ok)throw 0;setRes((await r.json()).tracks.map(reg))}
-   catch(e){if(e&&e.name==="AbortError")return;setRes([])}setBusy(false)},450);
-  return()=>{clearTimeout(t);ctl.abort()}},[q]);
+const GENRE_FALLBACK=[["Pop","pop"],["Hip-Hop","hip hop"],["Rock","rock"],["Indie","indie"],["Electronic","electronic"],["House","house"],["Techno","techno"],["Lo-Fi","lofi hip hop"],["Chill","chillout"],["Ambient","ambient"],["Jazz","jazz"],["Classical","classical piano"],["Metal","metal"],["R&B","r&b"],["Reggaeton","reggaeton"],["K-Pop","kpop"],["Persian Pop","persian pop"],["Persian Rap","persian rap"]];
+const genreMap=j=>(j.genres||[]).map((g,i,a)=>{const o={name:g.name,q:g.q,h:Math.round(i*360/a.length+8)%360,d:i+3,m:i%2};cover(o);return o});
+function useGenres(){const[g,setG]=useState(()=>genreMap({genres:GENRE_FALLBACK.map(([name,q])=>({name,q}))}));
+ useEffect(()=>{let off=false;fetch("/api/genres").then(r=>r.ok?r.json():null).then(j=>{if(!off&&j&&j.genres&&j.genres.length)setG(genreMap(j))}).catch(()=>{});return()=>{off=true}},[]);return g}
+function Search({play,onDir,cur}){const genres=useGenres(),[q,setQ]=useState(""),s=q.trim(),P=usePages(s.length>=2?s:"",null,true);
  return h(Screen,{title:"Search",right:h(Av),onDir},
   h("div",{className:"search rise",style:{"--d":1}},Ic("search"),h("input",{value:q,placeholder:"Artists, Songs…",onChange:e=>setQ(e.target.value)})),
-  q.trim().length>=2?(busy?Empty("Searching…"):res&&res.length?h("div",{className:"list"},res.map((o,i)=>h("button",{key:o.id,className:"li press rise",style:{"--d":Math.min(i,12)},onClick:()=>play(o,res)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a))))):Empty("No results."))
-   :h("div",{className:"grid",style:{gridTemplateColumns:"1fr 1fr"}},GENRE_TILES.map((g,i)=>h("div",{key:g,className:"gen press rise",style:{"--d":i+2,background:grad({h:i*47+10})},onClick:()=>setQ(g==="Persian"?"persian":g)},g))))}
+  s.length>=2?(P.items.length?h(React.Fragment,null,TrackList(P.items,play,cur),h(PageMore,{P})):P.busy?h(Loader):P.err?Empty("Search failed. Check your connection and try again."):Empty("No results."))
+   :h("div",{className:"grid gens"},genres.map((g,i)=>h("button",{key:g.name,className:"gen press rise",style:{"--d":Math.min(i,10)+2,backgroundColor:`hsl(${g.h} 55% 30%)`,backgroundImage:cssUrl(g),backgroundSize:"cover"},onClick:()=>setQ(g.q)},h("span",null,g.name)))))}
 
 /* ---- کنترل صدا: موج‌های بلندگو با سطح صدا عوض می‌شوند، اسلایدر نرم و فنری است، حباب درصد، و قطع/وصل با محو شدن ---- */
 let VOL=.8;
@@ -232,24 +294,26 @@ function Sheet({open,setOpen,cur,pl,toggle,go,tm,onPlaylist}){
  const dn=e=>{st.current=e.clientY;e.currentTarget.setPointerCapture(e.pointerId)};
  const mv=e=>{if(st.current==null)return;const dy=Math.max(0,e.clientY-st.current);el.current.style.transition="none";el.current.style.transform=`translateY(${dy}px)`};
  const up=e=>{if(st.current==null)return;const dy=e.clientY-st.current;st.current=null;el.current.style.transition="";el.current.style.transform="";if(dy>110)setOpen(false)};
- const pct=tm.d?tm.t/tm.d*100:0;
+ const pct=tm.d?Math.min(100,Math.max(0,tm.t/tm.d*100)):0;
  return h("div",{ref:el,className:"sheet"+(open?" open":"")},
   h("button",{className:"close",onClick:()=>setOpen(false),"aria-label":"Close"},Ic("back")),
   h(Backdrop,{o}),
   h("div",{onPointerDown:dn,onPointerMove:mv,onPointerUp:up,onPointerCancel:up,style:{paddingBottom:14,touchAction:"none"}},h("div",{className:"grab"}),Art(o,"big "+(pl?"":"pp"))),
   h("div",{className:"meta"},h("b",null,o?o.t:"Not Playing"),h("small",null,o?o.a:"")),
-  h("div",{style:{marginTop:18}},h("input",{type:"range",min:0,max:100,step:.1,value:pct,style:{"--p":pct+"%"},"aria-label":"Seek",disabled:!!(o&&o.live),onChange:e=>{if(au.duration)au.currentTime=e.target.value/100*au.duration}}),h("div",{className:"tm"},h("span",null,o&&o.live?"LIVE":fmt(tm.t)),h("span",null,o&&o.live?"":"-"+fmt(tm.d-tm.t)))),
+  h("div",{style:{marginTop:18}},h("input",{type:"range",min:0,max:100,step:.1,value:pct,style:{"--p":pct+"%"},"aria-label":"Seek",disabled:!!(o&&o.live),onChange:e=>{const d=durOf();if(d)try{au.currentTime=e.target.value/100*d}catch(x){}}}),h("div",{className:"tm"},h("span",null,o&&o.live?"LIVE":fmt(tm.t)),h("span",null,o&&o.live?"":"-"+fmt(Math.max(0,tm.d-tm.t))))),
   h("div",{className:"ctlrow"},h(SpeedBtn),h("div",{className:"ctl"},h("button",{onClick:()=>go(-1),"aria-label":"Previous"},Ic("rw")),h("button",{className:"pl",onClick:toggle,"aria-label":"Play or pause"},Ic(pl?"pause":"play")),h("button",{onClick:()=>go(1),"aria-label":"Next"},Ic("ff"))),h(ShareBtn,{o,onPlaylist})),
   h(Volume))}
 
 function App(){
  const ctx=useContext(UserCtx),notify=ctx&&ctx.notify?ctx.notify:()=>{};
- const[tab,setTab]=useState(0),[cur,setCur]=useState(null),[pl,setPl]=useState(false),[open,setOpen]=useState(false),[col,setCol]=useState(false),[tm,setTm]=useState({t:0,d:0}),[plFor,setPlFor]=useState(null);
+ const[more,setMore]=useState(null),[tab,setTab]=useState(0),[cur,setCur]=useState(null),[pl,setPl]=useState(false),[open,setOpen]=useState(false),[col,setCol]=useState(false),[tm,setTm]=useState({t:0,d:0}),[plFor,setPlFor]=useState(null);
  const cr=useRef(null),Q=useRef([]);
- useEffect(()=>{au.onplay=()=>setPl(true);au.onpause=()=>setPl(false);au.ontimeupdate=()=>setTm({t:au.currentTime,d:au.duration||0});
+ useEffect(()=>{au.onplay=()=>setPl(true);au.onpause=()=>setPl(false);const upd=()=>setTm({t:au.currentTime||0,d:durOf()});
+  au.ontimeupdate=upd;au.onloadedmetadata=upd;au.ondurationchange=upd;au.onseeked=upd;
   au.onended=()=>{if(cr.current&&!cr.current.live)go(1)};
-  au.onerror=()=>{setPl(false);if(cr.current)notify("Couldn’t play “"+cr.current.t+"”")}},[]);
+  au.onerror=()=>{const c=cr.current;if(c&&!c.live&&PT.retry!==c.id){PT.retry=c.id;delete LINKS[c.id];startTrack(c);return}setPl(false);if(c)notify("Couldn’t play “"+c.t+"”")}},[]);
  useEffect(()=>()=>{au.pause()},[]);
+ useEffect(()=>{ACT.pl=setPlFor;ACT.note=notify;ACT.more=setMore;return()=>{ACT.pl=()=>{};ACT.note=()=>{};ACT.more=()=>{}}});
  useEffect(()=>{const k=e=>{const t=e.target.tagName;if(t==="INPUT"&&e.target.type!=="range")return;
   if(e.key==="Escape")setOpen(false);
   else if(e.code==="Space"&&t!=="BUTTON"){e.preventDefault();toggle()}};
@@ -265,15 +329,16 @@ function App(){
  function play(o,list){if(!o)return;
   if(list&&list.length)Q.current=list;else if(!Q.current.some(x=>x.id===o.id))Q.current=[o];
   if(cr.current&&cr.current.id===o.id){au.paused?au.play().catch(()=>{}):au.pause();return}
-  cr.current=o;setCur(o);setTm({t:0,d:0});au.src=o.src;au.play().catch(()=>{})}
+  cr.current=o;CUR.o=o;PT.retry=null;setCur(o);setTm({t:0,d:o.live?0:(o.dur||0)});startTrack(o)}
  function go(d){const q=Q.current;if(!q.length)return;const i=q.findIndex(x=>cr.current&&x.id===cr.current.id),n=q[((i<0?0:i)+d+q.length)%q.length];
   if(cr.current&&n.id===cr.current.id){au.currentTime=0;au.play().catch(()=>{})}else play(n)}
  function toggle(){if(!cr.current)return;au.paused?au.play().catch(()=>{}):au.pause()}
  const o=cur,pr={play,onDir:setCol,cur},tabs=[["Home","home"],["Radio","radio"],["Library","lib"],["Search","search"]];
- const goTab=i=>{setTab(i);setCol(false)};
+ const goTab=i=>{setTab(i);setCol(false);setMore(null)};
  const S=[Home,Radio,Library,Search][tab];
  return h("div",{className:"app"},
   h(S,{key:tab,...pr}),
+  more&&h(MoreView,{key:more.title+"|"+more.q,...more,play,cur,onDir:setCol,onClose:()=>setMore(null)}),
   h("div",{className:"dock"+(col?" col":"")},
    h("button",{className:"side l circ press",onClick:()=>goTab(0),"aria-label":"Home"},Ic("home")),
    h("button",{className:"side r circ press",onClick:()=>goTab(3),"aria-label":"Search"},Ic("search")),

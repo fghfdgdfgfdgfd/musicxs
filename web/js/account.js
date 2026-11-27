@@ -19,10 +19,10 @@ function AuthScreen({onAuth}){
  const[mode,setMode]=useState("in"),[name,setName]=useState(""),[email,setEmail]=useState(""),[pw,setPw]=useState(""),[pw2,setPw2]=useState(""),[err,setErr]=useState(""),[busy,setBusy]=useState(false);
  const up=mode==="up",sw=m=>{setMode(m);setErr("");setPw2("")};
  const submit=async e=>{e.preventDefault();if(busy)return;setErr("");
-  if(up&&pw!==pw2)return setErr("Passwords don’t match.");
+  if(up&&pw!==pw2){SFX("warn");return setErr("Passwords don’t match.")}
   setBusy(true);
-  try{onAuth(up?await Auth.register({name,email,password:pw}):await Auth.login({email,password:pw}))}
-  catch(x){setErr(x.message||"Something went wrong. Try again.");setBusy(false)}};
+  try{const u=up?await Auth.register({name,email,password:pw}):await Auth.login({email,password:pw});SFX(up?"signup":"login");onAuth(u)}
+  catch(x){setErr(x.message||"Something went wrong. Try again.");setBusy(false);SFX("error")}};
  return h("div",{className:"auth"},h("div",{className:"auth-in"},h("div",{className:"auth-card"},
   h("div",{className:"logo rise",style:{"--d":0}},Ic("note")),
   h("h1",{className:"rise",style:{"--d":1}},"Music"),
@@ -49,10 +49,10 @@ function Modal({title,onClose,children}){
 function ChangePw({user,close,notify}){
  const[a,setA]=useState(""),[b,setB]=useState(""),[c,setC]=useState(""),[err,setErr]=useState(""),[busy,setBusy]=useState(false);
  const go=async e=>{e.preventDefault();if(busy)return;setErr("");
-  if(b!==c)return setErr("New passwords don’t match.");
+  if(b!==c){SFX("warn");return setErr("New passwords don’t match.")}
   setBusy(true);
   try{await Auth.changePassword(a,b);notify("Password updated");close()}
-  catch(x){setErr(x.message||"Couldn’t update the password.");setBusy(false)}};
+  catch(x){setErr(x.message||"Couldn’t update the password.");setBusy(false);SFX("error")}};
  return h(Modal,{title:"Change Password",onClose:close},
   h("form",{onSubmit:go,noValidate:true},
    h("input",{type:"text",hidden:true,readOnly:true,autoComplete:"username",value:user.email}),
@@ -67,7 +67,7 @@ function DeleteAcct({user,close,gone}){
  const[p,setP]=useState(""),[err,setErr]=useState(""),[busy,setBusy]=useState(false);
  const go=async e=>{e.preventDefault();if(busy)return;setErr("");setBusy(true);
   try{await Auth.deleteAccount(p);gone()}
-  catch(x){setErr(x.message||"Couldn’t delete the account.");setBusy(false)}};
+  catch(x){setErr(x.message||"Couldn’t delete the account.");setBusy(false);SFX("error")}};
  return h(Modal,{title:"Delete Account",onClose:close},
   h("form",{onSubmit:go,noValidate:true},
    h("p",{className:"note"},"This permanently deletes the account for "+user.email+" from this browser. You can’t undo it."),
@@ -78,6 +78,7 @@ function DeleteAcct({user,close,gone}){
    h("button",{className:"btn ghost",type:"button",onClick:close},"Cancel")))}
 
 function Profile({user,view,setView,logout,notify,gone}){
+ const[,bump]=useState(0);
  if(!view)return null;
  const close=()=>setView(null);
  if(view==="pw")return h(ChangePw,{user,close,notify});
@@ -89,6 +90,7 @@ function Profile({user,view,setView,logout,notify,gone}){
    h("div",{className:"pl"},
     h("div",{className:"pitem static"},Ic("mail"),h("div",{className:"t"},h("span",null,"Email"),h("small",null,user.email))),
     h("div",{className:"sep"}),
+    window.sfx&&h("button",{className:"pitem","data-sfx":1,role:"menuitem",onClick:()=>{window.sfx.toggle();bump(x=>x+1)}},Ic(window.sfx.enabled?"vol":"volx"),h("span",{className:"t"},window.sfx.enabled?"Sound: On":"Sound: Off")),
     item("key","Change Password",()=>setView("pw")),
     item("trash","Delete Account",()=>setView("del")),
     h("div",{className:"sep"}),
@@ -96,11 +98,11 @@ function Profile({user,view,setView,logout,notify,gone}){
 
 function Root(){
  const[user,setUser]=useState(()=>Auth.current()),[view,setView]=useState(null),[toast,setToast]=useState(null),tt=useRef(0);
- const notify=m=>{setToast(m);clearTimeout(tt.current);tt.current=setTimeout(()=>setToast(null),2600)};
+ const notify=m=>{const sn=toastSnd(m);if(sn)SFX(sn);setToast(m);clearTimeout(tt.current);tt.current=setTimeout(()=>setToast(null),2600)};
  useEffect(()=>{const f=()=>{const u=Auth.current();setUser(u);if(!u)setView(null)};addEventListener("storage",f);return()=>removeEventListener("storage",f)},[]);
  useEffect(()=>{if(!view)return;const k=e=>{if(e.key==="Escape")setView(null)};document.addEventListener("keydown",k);return()=>document.removeEventListener("keydown",k)},[view]);
- const logout=()=>{au.pause();Auth.logout();setUser(null);setView(null)};
- const gone=()=>{au.pause();setUser(null);setView(null);notify("Account deleted")};
+ const logout=()=>{SFX("logout");au.pause();Auth.logout();setUser(null);setView(null)};
+ const gone=()=>{SFX("danger");au.pause();setUser(null);setView(null);notify("Account deleted")};
  const ctx=React.useMemo(()=>({user,notify,openMenu:()=>setView("menu")}),[user]);
  return h("div",{className:"shell"},
   user?h(UserCtx.Provider,{value:ctx},h(App,{key:user.email}),h(Profile,{user,view,setView,logout,notify,gone}))

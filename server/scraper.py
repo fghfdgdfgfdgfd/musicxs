@@ -109,6 +109,8 @@ def related(url, n=15):
 
 # ---------- stream resolving (cached, URLs expire) ----------
 _cache = {}
+_locks = {}
+_locks_guard = threading.Lock()
 
 
 def resolve(url):
@@ -116,6 +118,16 @@ def resolve(url):
     c = _cache.get(url)
     if c and c[0] > now:
         return c[1]
+    with _locks_guard:
+        lk = _locks.setdefault(url, threading.Lock())
+    with lk:  # N people asking for the same track -> yt-dlp runs once, the rest get the cached result
+        c = _cache.get(url)
+        if c and c[0] > time.time():
+            return c[1]
+        return _resolve(url, now)
+
+
+def _resolve(url, now):
     with SEM:
         with yt_dlp.YoutubeDL(_opts(format="bestaudio[protocol=https]/bestaudio[protocol=http]/bestaudio/best")) as y:
             i = y.extract_info(url, download=False)
@@ -138,15 +150,20 @@ FIXED_ROWS = [
     {"slug": "top-hits", "title": "Top Hits", "q": "top hits"},
     {"slug": "new-releases", "title": "New Releases", "q": "new release"},
 ]
+# name -> SoundCloud search query. Order = order of the tiles in the Search tab.
 GENRES = {
-    "Electronic": "electronic", "House": "house", "Deep House": "deep house", "Techno": "techno",
-    "Trance": "trance", "Drum & Bass": "drum and bass", "Dubstep": "dubstep", "Synthwave": "synthwave",
-    "Hip-Hop": "hip hop", "Trap": "trap", "Phonk": "phonk", "R&B": "r&b", "Soul": "soul", "Funk": "funk",
-    "Pop": "pop", "K-Pop": "kpop", "Indie": "indie", "Rock": "rock", "Metal": "metal", "Punk": "punk",
-    "Jazz": "jazz", "Lo-Fi": "lofi", "Chill": "chillout", "Ambient": "ambient", "Classical": "classical piano",
-    "Folk": "folk acoustic", "Country": "country", "Reggae": "reggae", "Reggaeton": "reggaeton",
-    "Latin": "latin", "Afrobeats": "afrobeats", "Disco": "disco", "Persian Pop": "persian pop",
-    "Persian Rap": "persian rap",
+    "Pop": "pop", "Hip-Hop": "hip hop", "Rap": "rap", "Trap": "trap", "R&B": "r&b", "Rock": "rock",
+    "Indie": "indie", "Alternative": "alternative rock", "Electronic": "electronic", "House": "house",
+    "Deep House": "deep house", "Tech House": "tech house", "Techno": "techno", "Trance": "trance",
+    "Drum & Bass": "drum and bass", "Dubstep": "dubstep", "Future Bass": "future bass", "Synthwave": "synthwave",
+    "Lo-Fi": "lofi hip hop", "Chill": "chillout", "Ambient": "ambient", "Jazz": "jazz", "Blues": "blues",
+    "Soul": "soul", "Funk": "funk", "Disco": "disco", "Classical": "classical piano", "Piano": "piano",
+    "Soundtrack": "cinematic soundtrack", "Acoustic": "acoustic", "Folk": "folk", "Country": "country",
+    "Metal": "metal", "Punk": "punk", "Phonk": "phonk", "Drill": "drill", "Reggae": "reggae",
+    "Dancehall": "dancehall", "Reggaeton": "reggaeton", "Latin": "latin", "Salsa": "salsa", "Afrobeats": "afrobeats",
+    "Amapiano": "amapiano", "K-Pop": "kpop", "J-Pop": "jpop", "Bollywood": "bollywood", "Arabic": "arabic music",
+    "Turkish": "turkish pop", "Persian Pop": "persian pop", "Persian Rap": "persian rap", "Persian Traditional": "persian traditional",
+    "Workout": "workout", "Focus": "focus study", "Sleep": "sleep music", "Party": "party hits",
 }
 # a different modifier each 3h slot so a refresh actually brings different tracks
 MODS = ["", "new", "best", "hits", "mix", "vibes", "popular"]

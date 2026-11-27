@@ -60,8 +60,16 @@ def save_tracks(tracks):
 
 
 def _out(r):
-    return {"id": r["id"], "t": r["title"], "a": r["artist"], "cover": r["cover"],
+    # covers are served from our own disk cache: /api/cover/<id> (downloaded once, then cached for a year)
+    return {"id": r["id"], "t": r["title"], "a": r["artist"],
+            "cover": ("/api/cover/" + r["id"]) if r["cover"] else None,
             "url": r["url"], "dur": r["dur"]}
+
+
+def raw_cover(tid):
+    with db() as c:
+        r = c.execute("SELECT cover FROM tracks WHERE id=?", (tid,)).fetchone()
+    return r["cover"] if r else None
 
 
 def get_track(tid):
@@ -105,6 +113,11 @@ def prune_rows(keep):
             if s not in keep:
                 c.execute("DELETE FROM rows WHERE slug=?", (s,))
                 c.execute("DELETE FROM row_tracks WHERE slug=?", (s,))
+
+
+def home_track_ids():
+    with db() as c:
+        return [r["track_id"] for r in c.execute("SELECT DISTINCT track_id FROM row_tracks")]
 
 
 def home():

@@ -35,10 +35,14 @@ const PL=(()=>{
 function usePL(){const[,n]=useState(0);useEffect(()=>PL.on(()=>n(x=>x+1)),[]);return PL.all()}
 
 /* ---------- Download (server streams the file from SoundCloud) ---------- */
-function download(o){
- if(!o||o.live)return Promise.reject(new Error("live"));
- const a=document.createElement("a");a.href="/api/download/"+o.id+(o.url?"?u="+encodeURIComponent(o.url):"");a.download="";
- document.body.appendChild(a);a.click();a.remove();return Promise.resolve()}
+async function download(o){
+ if(!o||o.live)throw new Error("live");
+ const save=(href,name)=>{const a=document.createElement("a");a.href=href;a.download=name||"";document.body.appendChild(a);a.click();a.remove()};
+ const l=await linkOf(o);
+ if(l.hls){save("/api/download/"+o.id+(o.url?"?u="+encodeURIComponent(o.url):""));return}  /* HLS-only track: no single file on the CDN, server remuxes it */
+ const name=(o.a+" - "+o.t).replace(/[\\/:*?"<>|]+/g,"_").slice(0,150)+"."+(l.ext||"mp3");
+ try{const r=await fetch(l.url);if(!r.ok)throw 0;const u=URL.createObjectURL(await r.blob());save(u,name);setTimeout(()=>URL.revokeObjectURL(u),6e4)}  /* straight from the CDN to the browser */
+ catch(e){window.open(l.url,"_blank","noopener")}}  /* CDN blocks cross-origin fetch -> open the direct link */
 
 /* ---------- Playback speed (left of the transport controls) ---------- */
 const RATES=[.5,.75,1,1.25,1.5,2];
@@ -70,8 +74,8 @@ function PlaylistPicker({track,onClose}){
  const pls=usePL(),c=useContext(UserCtx),notify=c&&c.notify?c.notify:()=>{};
  const[name,setName]=useState(""),[err,setErr]=useState("");
  useEffect(()=>{const k=e=>{if(e.key==="Escape")onClose()};document.addEventListener("keydown",k);return()=>document.removeEventListener("keydown",k)},[]);
- const tog=p=>{try{notify(PL.toggle(p.id,track)?"Added to "+p.name:"Removed from "+p.name)}catch(x){setErr(x.message)}};
- const create=e=>{e.preventDefault();try{const p=PL.create(name,track);notify("Added to "+p.name);onClose()}catch(x){setErr(x.message)}};
+ const tog=p=>{try{notify(PL.toggle(p.id,track)?"Added to "+p.name:"Removed from "+p.name)}catch(x){setErr(x.message);SFX("error")}};
+ const create=e=>{e.preventDefault();try{const p=PL.create(name,track);SFX("success");notify("Added to "+p.name);onClose()}catch(x){setErr(x.message);SFX("warn")}};
  return h(Modal,{title:"Add to Playlist",onClose},
   pls.length?h("div",{className:"plist"},pls.map(p=>{const on=p.tracks.some(x=>x.id===track.id);
    return h("button",{key:p.id,className:"prow"+(on?" on":""),role:"checkbox","aria-checked":on,onClick:()=>tog(p)},
@@ -99,7 +103,7 @@ function PlaylistsView({play,cur}){
     h("button",{className:"main press",onClick:()=>play(o,list)},Art(o),h("span",{className:"t"},h("b",null,o.t),h("small",null,o.a))),
     h("button",{className:"rm",onClick:()=>PL.removeTrack(p.id,o.id),"aria-label":"Remove from playlist"},Ic("x")))}),
    h("button",{className:"li press pldel",onClick:()=>{if(conf){PL.remove(p.id);setOpenId(null)}else setConf(true)}},Ic("trash","r"),conf?"Tap again to delete this playlist":"Delete Playlist"))}
- const create=e=>{e.preventDefault();try{const n=PL.create(name);setName("");setErr("");setOpenId(n.id)}catch(x){setErr(x.message)}};
+ const create=e=>{e.preventDefault();try{const n=PL.create(name);setName("");setErr("");SFX("success");setOpenId(n.id)}catch(x){setErr(x.message);SFX("warn")}};
  return h("div",{className:"list"},
   h("form",{className:"search",onSubmit:create,noValidate:true},Ic("plus"),
    h("input",{value:name,placeholder:"New playlist",autoComplete:"off",onChange:e=>{setName(e.target.value);setErr("")}}),
