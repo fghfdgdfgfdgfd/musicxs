@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import covers, db, images, scraper
+from . import accounts, covers, db, images, scraper
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("app")
@@ -140,6 +140,114 @@ def _http_iter(src):
             yield b
     finally:
         r.close()
+
+
+# ---------------------------------------------------------------- account API
+AUTH_COOKIE = "ms_session"
+
+
+class RegisterIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class PasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class DeleteAccountIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
+def _cookie_secure(request: Request) -> bool:
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return request.url.scheme == "https" or forwarded == "https"
+
+
+def _set_auth_cookie(response: Response, request: Request, token: str):
+    response.set_cookie(
+        AUTH_COOKIE, token, max_age=accounts.SESSION_TTL, httponly=True,
+        secure=_cookie_secure(request), samesite="lax", path="/",
+    )
+
+
+def _require_user(request: Request):
+    token = request.cookies.get(AUTH_COOKIE)
+    user = accounts.get_session_user(token)
+    if not user:
+        raise HTTPException(401, "Please sign in again.")
+    return user
+
+
+@app.post("/api/auth/register")
+def api_auth_register(data: RegisterIn, request: Request, response: Response):
+    name = " ".join(data.name.split())
+    email = accounts.normalize_email(data.email)
+    if len(name) < 2:
+        raise HTTPException(400, "Enter your name (at least 2 letters).")
+    if not accounts.valid_email(email):
+        raise HTTPException(400, "Enter a valid email address.")
+    user = accounts.create_user(name, email, data.password)
+    if not user:
+        raise HTTPException(409, "An account with this email already exists. Sign in instead.")
+    token = accounts.create_session(user["id"])
+    _set_auth_cookie(response, request, token)
+    return {"name": user["name"], "email": user["email"]}
+
+
+@app.post("/api/auth/login")
+def api_auth_login(data: LoginIn, request: Request, response: Response):
+    email = accounts.normalize_email(data.email)
+    if not accounts.valid_email(email):
+        raise HTTPException(401, "Email or password is incorrect.")
+    user = accounts.authenticate(email, data.password)
+    if not user:
+        raise HTTPException(401, "Email or password is incorrect.")
+    token = accounts.create_session(user["id"])
+    _set_auth_cookie(response, request, token)
+    return {"name": user["name"], "email": user["email"]}
+
+
+@app.get("/api/auth/me")
+def api_auth_me(request: Request):
+    user = _require_user(request)
+    return {"name": user["name"], "email": user["email"]}
+
+
+@app.post("/api/auth/logout")
+def api_auth_logout(request: Request, response: Response):
+    accounts.revoke_session(request.cookies.get(AUTH_COOKIE))
+    response.delete_cookie(AUTH_COOKIE, path="/", httponly=True,
+                           secure=_cookie_secure(request), samesite="lax")
+    return {"ok": True}
+
+
+@app.post("/api/auth/password")
+def api_auth_change_password(data: PasswordIn, request: Request):
+    user = _require_user(request)
+    token = request.cookies.get(AUTH_COOKIE, "")
+    if data.new_password == data.current_password:
+        raise HTTPException(400, "New password must be different from the current one.")
+    if not accounts.change_password(user["id"], data.current_password, data.new_password, token):
+        raise HTTPException(400, "Current password is incorrect.")
+    return {"ok": True}
+
+
+@app.delete("/api/auth/account")
+def api_auth_delete_account(data: DeleteAccountIn, request: Request, response: Response):
+    user = _require_user(request)
+    if not accounts.delete_user(user["id"], data.password):
+        raise HTTPException(400, "Password is incorrect.")
+    response.delete_cookie(AUTH_COOKIE, path="/", httponly=True,
+                           secure=_cookie_secure(request), samesite="lax")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- API
@@ -346,7 +454,9 @@ async def headers(request, call_next):
     r = await call_next(request)
     r.headers["X-Content-Type-Options"] = "nosniff"
     r.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    if not request.url.path.startswith("/api"):
+    if request.url.path.startswith("/api/auth/"):
+        r.headers["Cache-Control"] = "no-store"
+    elif not request.url.path.startswith("/api"):
         r.headers["Cache-Control"] = "no-cache"
     return r
 

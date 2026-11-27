@@ -1,61 +1,72 @@
-/* Accounts live in this browser (localStorage). Passwords are never stored as plain text. */
+/* Accounts are stored on the server. Legacy browser-only accounts are migrated on first successful sign-in. */
 const Auth=(()=>{
- const UK="ms_users_v1",SK="ms_session_v1",MIN=6;
- const rd=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
- const users=()=>rd(UK)||{};
- const put=u=>{try{localStorage.setItem(UK,JSON.stringify(u))}catch(e){throw new Error("This browser can’t save accounts (storage is blocked).")}};
+ const UK="ms_users_v1",MIN=6;
+ let activeUser=null;
+ const normE=e=>String(e||"").trim().toLowerCase();
+ const readLegacy=()=>{try{return JSON.parse(localStorage.getItem(UK))||{}}catch(e){return {}}};
  const hex=b=>Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,"0")).join("");
  const canSubtle=()=>!!(window.crypto&&crypto.subtle&&crypto.subtle.importKey);
- const rnd=()=>{const a=new Uint8Array(16);if(window.crypto&&crypto.getRandomValues)crypto.getRandomValues(a);else a.forEach((_,i)=>a[i]=Math.random()*256);return hex(a)};
- const clean=n=>String(n||"").replace(/\s+/g," ").trim();
- const normE=e=>String(e||"").trim().toLowerCase();
- const okE=e=>/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
- const pub=u=>({name:u.name,email:u.email});
-
- async function derive(pw,salt,alg){
+ async function legacyDerive(pw,salt,alg){
   if(alg==="pbkdf2"){
-   if(!canSubtle())throw new Error("Open the site over https or localhost to sign in.");
+   if(!canSubtle())return null;
    const e=new TextEncoder(),k=await crypto.subtle.importKey("raw",e.encode(pw),"PBKDF2",false,["deriveBits"]);
-   return hex(await crypto.subtle.deriveBits({name:"PBKDF2",salt:e.encode(salt),iterations:150000,hash:"SHA-256"},k,256))}
-  /* fallback for non-secure contexts (plain http on a LAN address) */
+   return hex(await crypto.subtle.deriveBits({name:"PBKDF2",salt:e.encode(salt),iterations:150000,hash:"SHA-256"},k,256));
+  }
   let h1=0xdeadbeef,h2=0x41c6ce57;const s=salt+pw;
   for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);h1=Math.imul(h1^c,2654435761);h2=Math.imul(h2^c,1597334677)}
   h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);
   h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);
-  return(4294967296*(2097151&h2)+(h1>>>0)).toString(16)}
- async function mk(pw){const salt=rnd(),alg=canSubtle()?"pbkdf2":"basic";return{salt,alg,hash:await derive(pw,salt,alg)}}
- const check=async(u,pw)=>(await derive(pw,u.salt,u.alg))===u.hash;
- const me=()=>{const e=localStorage.getItem(SK),u=e&&users()[e];return u||null};
- const needPw=p=>{if(String(p||"").length<MIN)throw new Error("Password must be at least "+MIN+" characters.")};
-
+  return(4294967296*(2097151&h2)+(h1>>>0)).toString(16);
+ }
+ async function legacyMatches(u,pw){try{return !!u&&await legacyDerive(pw,u.salt,u.alg)===u.hash}catch(e){return false}}
+ async function request(path,options={}){
+  let r;
+  try{r=await fetch(path,{credentials:"same-origin",...options,headers:{...(options.body?{"Content-Type":"application/json"}:{}),...(options.headers||{})}})}
+  catch(e){throw new Error("Can’t reach the server. Check your connection and try again.")}
+  let data={};try{data=await r.json()}catch(e){}
+  if(!r.ok)throw new Error(data.detail||"Something went wrong. Try again.");
+  return data;
+ }
+ const json=(method,data)=>({method,body:JSON.stringify(data)});
  return{
   MIN,
-  current(){try{const u=me();if(!u&&localStorage.getItem(SK))localStorage.removeItem(SK);return u?pub(u):null}catch(e){return null}},
+  current(){return activeUser},
+  async restore(){try{activeUser=await request("/api/auth/me")}catch(e){activeUser=null}return activeUser},
   async register({name,email,password}){
-   name=clean(name);email=normE(email);
+   name=String(name||"").replace(/\s+/g," ").trim();email=normE(email);
    if(name.length<2)throw new Error("Enter your name (at least 2 letters).");
    if(name.length>40)throw new Error("Name is too long (40 characters max).");
-   if(!okE(email))throw new Error("Enter a valid email address.");
-   needPw(password);
-   const all=users();
-   if(all[email])throw new Error("An account with this email already exists. Sign in instead.");
-   all[email]={name,email,created:Date.now(),...await mk(password)};
-   put(all);localStorage.setItem(SK,email);return pub(all[email])},
+   if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))throw new Error("Enter a valid email address.");
+   if(String(password||"").length<MIN)throw new Error("Password must be at least "+MIN+" characters.");
+   activeUser=await request("/api/auth/register",json("POST",{name,email,password}));
+   return activeUser;
+  },
   async login({email,password}){
    email=normE(email);
    if(!email||!password)throw new Error("Enter your email and password.");
-   const u=users()[email];
-   if(!u||!(await check(u,password)))throw new Error("Email or password is incorrect.");
-   localStorage.setItem(SK,email);return pub(u)},
-  logout(){try{localStorage.removeItem(SK)}catch(e){}},
+   try{activeUser=await request("/api/auth/login",json("POST",{email,password}));return activeUser}
+   catch(serverError){
+    /* Upgrade old accounts previously kept only in this browser. */
+    if(serverError.message==="Email or password is incorrect."){
+     const legacy=readLegacy()[email];
+     if(await legacyMatches(legacy,password)){
+      try{
+       activeUser=await request("/api/auth/register",json("POST",{name:legacy.name||"Music User",email,password}));
+       const all=readLegacy();delete all[email];
+       try{localStorage.setItem(UK,JSON.stringify(all))}catch(e){}
+       return activeUser;
+      }catch(migrationError){/* An account already exists on the server: keep the original sign-in error. */}
+     }
+    }
+    throw serverError;
+   }
+  },
+  async logout(){await request("/api/auth/logout",{method:"POST"});activeUser=null},
   async changePassword(cur,next){
-   const u=me();if(!u)throw new Error("You’re signed out. Sign in again.");
-   if(!(await check(u,cur)))throw new Error("Current password is incorrect.");
-   needPw(next);
+   if(String(next||"").length<MIN)throw new Error("Password must be at least "+MIN+" characters.");
    if(next===cur)throw new Error("New password must be different from the current one.");
-   const all=users();all[u.email]={...u,...await mk(next)};put(all)},
-  async deleteAccount(password){
-   const u=me();if(!u)throw new Error("You’re signed out. Sign in again.");
-   if(!(await check(u,password)))throw new Error("Password is incorrect.");
-   const all=users();delete all[u.email];put(all);localStorage.removeItem(SK);try{localStorage.removeItem("ms_pl_v1_"+u.email)}catch(e){}}
- }})();
+   await request("/api/auth/password",json("POST",{current_password:cur,new_password:next}));
+  },
+  async deleteAccount(password){await request("/api/auth/account",json("DELETE",{password}));activeUser=null}
+ };
+})();

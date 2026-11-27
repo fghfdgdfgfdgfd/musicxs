@@ -16,6 +16,7 @@ def db():
     c = sqlite3.connect(PATH, timeout=30)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA foreign_keys=ON")
     try:
         with c:  # commit on success, rollback on error
             yield c
@@ -37,6 +38,20 @@ def init():
             CREATE TABLE IF NOT EXISTS recs(
               seed TEXT PRIMARY KEY, ids TEXT, updated INTEGER);
             CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
+            CREATE TABLE IF NOT EXISTS users(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+              password_salt TEXT NOT NULL,
+              password_hash TEXT NOT NULL,
+              created INTEGER NOT NULL,
+              updated INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS sessions(
+              token_hash TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              expires INTEGER NOT NULL,
+              created INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
             """
         )
 

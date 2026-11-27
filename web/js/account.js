@@ -97,15 +97,17 @@ function Profile({user,view,setView,logout,notify,gone}){
     item("out","Sign Out",logout))))}
 
 function Root(){
- const[user,setUser]=useState(()=>Auth.current()),[view,setView]=useState(null),[toast,setToast]=useState(null),tt=useRef(0);
+ const[user,setUser]=useState(null),[loading,setLoading]=useState(true),[view,setView]=useState(null),[toast,setToast]=useState(null),tt=useRef(0);
+ useEffect(()=>{let active=true;Auth.restore().then(u=>{if(active){setUser(u);setLoading(false)}}).catch(()=>{if(active)setLoading(false)});return()=>{active=false}},[]);
  const notify=m=>{const sn=toastSnd(m);if(sn)SFX(sn);setToast(m);clearTimeout(tt.current);tt.current=setTimeout(()=>setToast(null),2600)};
- useEffect(()=>{const f=()=>{const u=Auth.current();setUser(u);if(!u)setView(null)};addEventListener("storage",f);return()=>removeEventListener("storage",f)},[]);
+ useEffect(()=>{const f=()=>{Auth.restore().then(u=>{setUser(u);if(!u)setView(null)})};addEventListener("focus",f);return()=>removeEventListener("focus",f)},[]);
  useEffect(()=>{if(!view)return;const k=e=>{if(e.key==="Escape")setView(null)};document.addEventListener("keydown",k);return()=>document.removeEventListener("keydown",k)},[view]);
- const logout=()=>{SFX("logout");au.pause();Auth.logout();setUser(null);setView(null)};
+ const logout=async()=>{SFX("logout");au.pause();try{await Auth.logout()}finally{setUser(null);setView(null)}};
  const gone=()=>{SFX("danger");au.pause();setUser(null);setView(null);notify("Account deleted")};
  const ctx=React.useMemo(()=>({user,notify,openMenu:()=>setView("menu")}),[user]);
  return h("div",{className:"shell"},
-  user?h(UserCtx.Provider,{value:ctx},h(App,{key:user.email}),h(Profile,{user,view,setView,logout,notify,gone}))
+  loading?h("div",{className:"auth"},h("div",{className:"auth-in"},h("div",{className:"auth-card"},h("div",{className:"logo"},Ic("note")),h("h1",null,"Music"),h("p",{className:"sub"},"Loading your account…"))))
+  :user?h(UserCtx.Provider,{value:ctx},h(App,{key:user.email}),h(Profile,{user,view,setView,logout,notify,gone}))
       :h(AuthScreen,{onAuth:setUser}),
   toast&&h("div",{className:"toast",role:"status"},toast))}
 
