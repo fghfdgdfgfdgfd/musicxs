@@ -1,0 +1,20 @@
+[
+ {"id":"somafm-groovesalad","name":"Groove Salad","genre":"Ambient / Downtempo","group":"Chill & Ambient","featured":true,"desc":"A nicely chilled plate of ambient and downtempo beats.","stream":"https://ice1.somafm.com/groovesalad-128-mp3"},
+ {"id":"somafm-deepspaceone","name":"Deep Space One","genre":"Deep Ambient","group":"Chill & Ambient","featured":false,"desc":"Deep ambient electronic and experimental space music.","stream":"https://ice1.somafm.com/deepspaceone-128-mp3"},
+ {"id":"somafm-dronezone","name":"Drone Zone","genre":"Atmospheric Ambient","group":"Chill & Ambient","featured":false,"desc":"Served best chilled, safe with most medications.","stream":"https://ice1.somafm.com/dronezone-128-mp3"},
+ {"id":"somafm-lush","name":"Lush","genre":"Mellow Vocals","group":"Chill & Ambient","featured":false,"desc":"Sensuous and mellow female vocals with an electronic edge.","stream":"https://ice1.somafm.com/lush-128-mp3"},
+ {"id":"somafm-spacestation","name":"Space Station Soma","genre":"Spaced-out Electronic","group":"Chill & Ambient","featured":false,"desc":"Tune in, turn on, space out. Ambient and mid-tempo electronica.","stream":"https://ice1.somafm.com/spacestation-128-mp3"},
+ {"id":"somafm-beatblender","name":"Beat Blender","genre":"Deep House / Downtempo","group":"Electronic","featured":true,"desc":"A late night blend of deep-house and downtempo chill.","stream":"https://ice1.somafm.com/beatblender-128-mp3"},
+ {"id":"somafm-defcon","name":"DEF CON Radio","genre":"Hacker Electronic","group":"Electronic","featured":false,"desc":"Music for hacking. The DEF CON Year-Round Channel.","stream":"https://ice1.somafm.com/defcon-128-mp3"},
+ {"id":"somafm-thetrip","name":"The Trip","genre":"Progressive House","group":"Electronic","featured":false,"desc":"Progressive house and trance. Tip top tunes.","stream":"https://ice1.somafm.com/thetrip-128-mp3"},
+ {"id":"somafm-secretagent","name":"Secret Agent","genre":"Lounge / Spy Themes","group":"Electronic","featured":false,"desc":"The soundtrack for your stylish, mysterious, dangerous life.","stream":"https://ice1.somafm.com/secretagent-128-mp3"},
+ {"id":"somafm-indiepop","name":"Indie Pop Rocks!","genre":"Indie Pop","group":"Rock & Indie","featured":true,"desc":"New and classic favorite indie pop tracks.","stream":"https://ice1.somafm.com/indiepop-128-mp3"},
+ {"id":"somafm-bootliquor","name":"Boot Liquor","genre":"Americana","group":"Rock & Indie","featured":false,"desc":"Americana roots music for your Saturday night hoedown.","stream":"https://ice1.somafm.com/bootliquor-128-mp3"},
+ {"id":"somafm-u80s","name":"Underground 80s","genre":"Synthpop / New Wave","group":"Rock & Indie","featured":false,"desc":"Early 80s UK synthpop and a bit of New Wave.","stream":"https://ice1.somafm.com/u80s-128-mp3"},
+ {"id":"rp-main","name":"Radio Paradise","genre":"Eclectic","group":"Eclectic","featured":true,"desc":"Listener-supported eclectic mix, hand-picked by real DJs.","stream":"https://stream.radioparadise.com/mp3-128"},
+ {"id":"rp-mellow","name":"RP Mellow Mix","genre":"Mellow","group":"Eclectic","featured":false,"desc":"Mellow and soulful eclectic selections.","stream":"https://stream.radioparadise.com/mellow-128"},
+ {"id":"rp-rock","name":"RP Rock Mix","genre":"Rock","group":"Eclectic","featured":false,"desc":"Classic and modern rock from Radio Paradise.","stream":"https://stream.radioparadise.com/rock-128"},
+ {"id":"rp-global","name":"RP Global Mix","genre":"World","group":"Eclectic","featured":false,"desc":"Music from around the world.","stream":"https://stream.radioparadise.com/global-128"},
+ {"id":"nts-1","name":"NTS Radio 1","genre":"Live Radio","group":"Eclectic","featured":false,"desc":"Live shows from NTS, London.","stream":"https://stream-relay-geo.ntslive.net/stream"},
+ {"id":"nts-2","name":"NTS Radio 2","genre":"Live Radio","group":"Eclectic","featured":false,"desc":"Second live channel from NTS.","stream":"https://stream-relay-geo.ntslive.net/stream2"}
+]
