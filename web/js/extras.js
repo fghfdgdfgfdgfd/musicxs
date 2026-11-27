@@ -211,3 +211,30 @@ function Support(){
    h("div",{className:"pmenu smenu",role:"menu",style:{top:pos.top,left:pos.left,right:"auto"},onClick:e=>e.stopPropagation()},
     h("div",{className:"sonl"},h("i",{className:"ldot"}),h("b",null,n==null?"–":n.toLocaleString()),h("span",null,"online now")),
     h("div",{className:"slinks"},A("tg","https://t.me/amirh00sain","Telegram","tg"),A("gh","https://github.com/amirh00sain","GitHub","gh")))),document.querySelector(".shell")))}
+
+/* ---------- Offline cache: the audio of every song that is in a playlist is saved in the browser (Cache Storage)
+   and kept until the song is removed from all playlists. Links expire, so the audio file itself is stored. ---------- */
+const OFF=(()=>{
+ const NAME="ms-audio-v1",ok=!!window.caches,P="/_offline/",U=id=>P+encodeURIComponent(id),fail={};let obj=null,running=false,again=false;
+ const open=()=>caches.open(NAME);
+ async function url(id){if(!ok)return null;
+  try{const c=await open(),r=await c.match(U(id));if(!r)return null;const b=await r.blob();if(!b.size)return null;
+   const u=URL.createObjectURL(b);if(obj)URL.revokeObjectURL(obj);return obj=u}catch(e){return null}}
+ async function grab(o){let r=null;
+  try{const l=await linkOf(o);if(!l.hls){const x=await fetch(l.url);if(x.ok)r=x}}catch(e){}   /* straight from the CDN when it allows it */
+  if(!r){const x=await fetch("/api/download/"+o.id+(o.url?"?u="+encodeURIComponent(o.url):""));if(!x.ok)throw 0;r=x}  /* otherwise through the server */
+  const b=await r.blob();if(b.size<20000)throw 0;return b}
+ async function sync(){if(!ok||!Auth.current())return;if(running){again=true;return}running=true;
+  try{do{again=false;
+   const want=new Map();PL.all().forEach(p=>p.tracks.forEach(t=>{if(t&&t.id&&String(t.id).indexOf("r:")!==0)want.set(t.id,t)}));
+   const c=await open(),have=new Set((await c.keys()).map(r=>{try{return decodeURIComponent(new URL(r.url).pathname.slice(P.length))}catch(e){return""}}));
+   for(const id of have)if(!want.has(id)){await c.delete(U(id));have.delete(id)}   /* removed from every playlist -> removed from the cache */
+   for(const[id,t]of want){if(have.has(id)||(fail[id]&&Date.now()-fail[id]<3*60e3))continue;
+    if(!want.has(id))continue;
+    try{const b=await grab(reg(t));await c.put(U(id),new Response(b,{headers:{"Content-Type":b.type&&b.type.indexOf("audio")===0?b.type:"audio/mpeg"}}));delete fail[id]}
+    catch(e){fail[id]=Date.now()}
+    if(again)break}
+  }while(again)}catch(e){}finally{running=false}}
+ if(ok){try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+  PL.on(sync);setTimeout(sync,2500);setInterval(sync,60e3);addEventListener("online",sync)}
+ return{url,sync}})();

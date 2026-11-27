@@ -95,24 +95,25 @@ function reg(o){const r=REG[o.id]||(REG[o.id]={});Object.assign(r,o);
  if(r.h==null){const x=hash(String(r.id));r.h=x%360;r.d=x%97+1;r.m=x>>3&1}
  if(!r.src)r.src="/api/stream/"+r.id+(r.url?"?u="+encodeURIComponent(r.url):"");
  return r}
-const au=new Audio();au.preload="auto";
+const au=new Audio();au.preload="auto";au.addEventListener("playing",()=>{PT.tries=0});
 /* real duration if the browser knows it; streams report Infinity/NaN, so fall back to the length from the track's metadata */
 const durOf=()=>{const d=au.duration;if(isFinite(d)&&d>0)return d;const c=CUR.o;return c&&!c.live&&c.dur?c.dur:0};
 const CUR={o:null};
 /* ---- direct playback: the server only hands out the CDN link, the browser streams the audio itself ---- */
-const LINKS={},PT={n:0,retry:null};let HLS=null;
+const LINKS={},PT={n:0,retry:null,tries:0,id:null};let HLS=null;
 const stopHls=()=>{if(HLS){try{HLS.destroy()}catch(e){}HLS=null}};
-async function linkOf(o){const c=LINKS[o.id];if(c&&Date.now()-c.t<15*60e3)return c;
- const r=await fetch("/api/link/"+o.id+(o.url?"?u="+encodeURIComponent(o.url):""));if(!r.ok)throw new Error("link");
+async function linkOf(o,fresh){const c=LINKS[o.id];if(!fresh&&c&&Date.now()-c.t<10*60e3)return c;
+ const r=await fetch("/api/link/"+o.id+"?"+(o.url?"u="+encodeURIComponent(o.url)+"&":"")+(fresh?"fresh=1&":"")+"_="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("link");
  return LINKS[o.id]={...await r.json(),t:Date.now()}}
 function attach(l){stopHls();
  if(!l.hls||au.canPlayType("application/vnd.apple.mpegurl")){au.src=l.url;return}
  if(!(window.Hls&&Hls.isSupported()))throw new Error("no hls");
  HLS=new Hls({maxBufferLength:30});HLS.loadSource(l.url);HLS.attachMedia(au);
  HLS.on(Hls.Events.ERROR,(e,d)=>{if(d&&d.fatal&&au.onerror)au.onerror()})}
-function startTrack(o){const tok=++PT.n;stopHls();
+function startTrack(o,fresh){const tok=++PT.n;stopHls();
  if(o.live){au.src=o.src;au.play().catch(()=>{});return}
- linkOf(o).then(l=>{if(tok!==PT.n)return;attach(l);return au.play()}).catch(()=>{if(tok===PT.n&&au.onerror)au.onerror()})}
+ (fresh||typeof OFF==="undefined"?Promise.resolve(null):OFF.url(o.id)).then(u=>{if(tok!==PT.n)return;if(u){au.src=u;return au.play()}
+  return linkOf(o,fresh).then(l=>{if(tok!==PT.n)return;attach(l);return au.play()})}).catch(()=>{if(tok===PT.n&&au.onerror)au.onerror()})}
 const grad=o=>`linear-gradient(145deg,hsl(${o.h} 62% 50%),hsl(${o.h+40} 55% 22%))`;
 const fmt=s=>isFinite(s)&&s>0?Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0"):"0:00";
 const rs=i=>({className:"rise",style:{"--d":i}});
@@ -166,7 +167,7 @@ const ini=n=>Array.from(String(n||"").trim()).slice(0,2).join("").toUpperCase()|
 function Av(){const c=useContext(UserCtx);
  return h("button",{className:"circ av",onClick:()=>c&&c.openMenu(),"aria-label":"Profile","aria-haspopup":"menu"},c&&c.user?ini(c.user.name):"?")}
 /* hooks that App fills in: open the "Add to Playlist" dialog / show a toast */
-const ACT={pl:()=>{},note:()=>{},more:()=>{}};
+const ACT={pl:()=>{},note:()=>{},more:()=>{},search:()=>{}};
 const halt=f=>e=>{e.stopPropagation();e.preventDefault();f()};
 const Card=(o,i,play,list)=>h("div",{key:o.id,className:"card press",role:"button",tabIndex:0,style:{"--i":i},onClick:()=>play(o,list),
  onKeyDown:e=>{if(e.target===e.currentTarget&&(e.key==="Enter"||e.key===" ")){e.preventDefault();e.stopPropagation();play(o,list)}}},
@@ -210,7 +211,14 @@ function usePages(q,seed,auto){
   if(auto){setS({items:[],busy:true,more:false,err:false});const t=setTimeout(()=>fetchPage(true),450);return()=>{clearTimeout(t);if(r.ctl)r.ctl.abort()}}
   setS({items:seed||[],busy:false,more:true,err:false});return()=>{if(r.ctl)r.ctl.abort()}},[q]);
  return{...s,load:()=>fetchPage(false)}}
-const TrackList=(items,play,cur)=>h("div",{className:"list"},items.map((o,i)=>h("button",{key:o.id,className:"li press rise"+(cur&&cur.id===o.id?" on":""),style:{"--d":Math.min(i%20,12)},onClick:()=>play(o,items)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a)))));
+const searchMenu=o=>[
+ {icon:"bm",label:"Add to Playlist",fn:()=>ACT.pl(o)},
+ {icon:"dl",label:"Download",fn:()=>download(o).then(()=>ACT.note("Download started")).catch(()=>ACT.note("Couldn’t download this song"))}];
+function TrackListV({items,play,cur}){const[mnode,openMenu]=useMenu();
+ return h("div",{className:"list"},items.map((o,i)=>h("div",{key:o.id,className:"li rise"+(cur&&cur.id===o.id?" on":""),style:{"--d":Math.min(i%20,12)}},
+  h("button",{className:"main press",onClick:()=>play(o,items)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a))),
+  !o.live&&h("button",{className:"rm",onClick:e=>openMenu(e,searchMenu(o)),"aria-label":"More","aria-haspopup":"menu"},Ic("more")))),mnode)}
+const TrackList=(items,play,cur)=>h(TrackListV,{items,play,cur});
 const PageMore=({P})=>P.busy?h(Loader):P.err?h("div",{className:"list"},h("button",{className:"morebtn press",onClick:P.load},"Couldn’t load. Tap to retry")):P.more&&P.items.length?h("div",{className:"list"},h("button",{className:"morebtn press",onClick:P.load},"More")):null;
 function MoreView({title,q,seed,play,cur,onClose,onDir}){
  const[out,setOut]=useState(false),P=usePages(q,seed,false);
@@ -240,24 +248,34 @@ function Radio({play,onDir}){
   groups.map(g=>Row(g,d.filter(s=>s.group===g),play)))}
 
 /* Library is built from the tracks in the user's playlists */
-function LibList({kind,play,cur}){const pls=usePL(),songs=libSongs(pls),[mnode,openMenu]=useMenu(),rep=useRep();
+function LibList({kind,play,cur,openArt,setOpenArt}){const pls=usePL(),songs=libSongs(pls),[mnode,openMenu]=useMenu(),rep=useRep();
  if(!songs.length)return h("div",{className:"list"},Empty("Songs you add to a playlist show up here."));
  if(kind==="Artists"){const m={};songs.forEach(o=>(m[o.a]=m[o.a]||[]).push(o));
-  return h("div",{className:"list"},Object.keys(m).sort().map((a,i)=>h("button",{key:a,className:"li press rise",style:{"--d":Math.min(i,12)},onClick:()=>play(m[a][0],m[a])},Art(m[a][0]),h("div",{className:"t"},h("b",null,a),h("small",null,m[a].length+(m[a].length===1?" song":" songs"))),Ic("chev","ch"))))}
+  if(openArt&&m[openArt]){const l=m[openArt];
+   return h("div",{className:"list"},
+    h("button",{className:"li press",onClick:()=>setOpenArt(null)},Ic("back","r"),"Artists"),
+    h("h2",{className:"plh"},openArt),
+    h("button",{className:"li press plact",onClick:()=>{REP.set(null);play(l[0],l)}},Ic("play","r"),"Play"),
+    l.map(o=>h("div",{key:o.id,className:"li"+(cur&&cur.id===o.id?" on":"")},
+     h("button",{className:"main press",onClick:()=>play(o,l)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a))),
+     rep===o.id&&Ic("repeat","rp"),
+     h("button",{className:"rm",onClick:e=>openMenu(e,searchMenu(o).concat(trackMenu(o,l,play,"Remove from Playlist",()=>{PL.removeEverywhere(o.id);ACT.note("Removed from playlist")}))),"aria-label":"More","aria-haspopup":"menu"},Ic("more")))),mnode)}
+  return h("div",{className:"list"},Object.keys(m).sort().map((a,i)=>h("button",{key:a,className:"li press rise",style:{"--d":Math.min(i,12)},onClick:()=>setOpenArt(a)},Art(m[a][0]),h("div",{className:"t"},h("b",null,a),h("small",null,m[a].length+(m[a].length===1?" song":" songs"))),Ic("chev","ch"))))}
  return h("div",{className:"list"},songs.map((o,i)=>h("div",{key:o.id,className:"li rise"+(cur&&cur.id===o.id?" on":""),style:{"--d":Math.min(i,12)}},
   h("button",{className:"main press",onClick:()=>play(o,songs)},Art(o),h("div",{className:"t"},h("b",null,o.t),h("small",null,o.a))),
   rep===o.id&&Ic("repeat","rp"),
   h("button",{className:"rm",onClick:e=>openMenu(e,trackMenu(o,songs,play,"Remove from Playlist",()=>{PL.removeEverywhere(o.id);ACT.note("Removed from playlist")})),"aria-label":"More","aria-haspopup":"menu"},Ic("more")))),mnode)}
 function Library({play,onDir,cur}){
- const[sub,setSub]=useState(null),[out,setOut]=useState(false),[plOpen,setPlOpen]=useState(null),[conf,setConf]=useState(null);
+ const[sub,setSub]=useState(null),[out,setOut]=useState(false),[plOpen,setPlOpen]=useState(null),[openArt,setOpenArt]=useState(null),[conf,setConf]=useState(null);
  const pls=usePL(),songs=libSongs(pls),[mnode,openMenu]=useMenu(),openPl=pls.find(p=>p.id===plOpen);
- const close=()=>{setOut(true);setTimeout(()=>{setSub(null);setOut(false);setPlOpen(null)},700)};
+ const close=()=>{setOut(true);setTimeout(()=>{setSub(null);setOut(false);setPlOpen(null);setOpenArt(null)},700)};
  /* منوی سه‌نقطه‌ی بالا: Play All (نوبت‌به‌نوبت از اول) و حذف همه */
  const playAll=l=>{if(!l.length)return;REP.set(null);play(l[0],l,true)};
  const menuItems=()=>{
   if(sub==="Playlists"&&openPl){const l=openPl.tracks.map(reg);
    return[{icon:"play",label:"Play All",disabled:!l.length,fn:()=>playAll(l)},
     {icon:"trash",label:"Remove All Songs",danger:1,disabled:!l.length,fn:()=>setConf({title:"Remove All Songs",text:"Remove all songs from “"+openPl.name+"”?",yes:"Remove All",fn:()=>{PL.clearTracks(openPl.id);ACT.note("Removed all songs")}})}]}
+  if(sub==="Artists"&&openArt)return[{icon:"search",label:"Load More",fn:()=>ACT.search(openArt)}];
   if(sub==="Playlists")return[{icon:"play",label:"Play All",disabled:!songs.length,fn:()=>playAll(songs)},
    {icon:"trash",label:"Delete All Playlists",danger:1,disabled:!pls.length,fn:()=>setConf({title:"Delete All Playlists",text:"Delete all "+pls.length+" playlists? This can’t be undone.",yes:"Delete All",fn:()=>{PL.removeAll();setPlOpen(null);ACT.note("All playlists deleted")}})}];
   return[{icon:"play",label:"Play All",disabled:!songs.length,fn:()=>playAll(songs)},
@@ -268,7 +286,7 @@ function Library({play,onDir,cur}){
   h(Screen,{title:"Library",right:h(Av),onDir,cls:"inner"},h("div",{className:"list"},items.map((it,i)=>h("button",{key:i,className:"li press rise",style:{"--d":i+1},onClick:()=>setSub(it[0])},Ic(it[1],"r"),it[0],Ic("chev","ch"))))),
   sub&&h("div",{className:"screen subs",style:{background:"var(--bg)",animation:(out?"outR":"inR")+" .7s cubic-bezier(.32,.72,0,1) both",zIndex:8}},
    h(Screen,{title:sub,back:1,onBack:close,right:h("button",{className:"circ press",onClick:e=>openMenu(e,menuItems()),"aria-label":"More","aria-haspopup":"menu"},Ic("more")),onDir,cls:"inner"},
-    sub==="Playlists"?h(PlaylistsView,{play,cur,openId:plOpen,setOpenId:setPlOpen}):h(LibList,{kind:sub,play,cur}))),
+    sub==="Playlists"?h(PlaylistsView,{play,cur,openId:plOpen,setOpenId:setPlOpen}):h(LibList,{kind:sub,play,cur,openArt,setOpenArt}))),
   mnode,conf&&h(Confirm,{title:conf.title,text:conf.text,yes:conf.yes,onYes:conf.fn,onClose:()=>setConf(null)}))}
 
 const GENRE_FALLBACK=[["Pop","pop"],["Hip-Hop","hip hop"],["Rock","rock"],["Indie","indie"],["Electronic","electronic"],["House","house"],["Techno","techno"],["Lo-Fi","lofi hip hop"],["Chill","chillout"],["Ambient","ambient"],["Jazz","jazz"],["Classical","classical piano"],["Metal","metal"],["R&B","r&b"],["Reggaeton","reggaeton"],["K-Pop","kpop"],["Persian Pop","persian pop"],["Persian Rap","persian rap"]];
@@ -276,7 +294,7 @@ const GENRE_FALLBACK=[["Pop","pop"],["Hip-Hop","hip hop"],["Rock","rock"],["Indi
 const genreMap=j=>(j.genres||[]).map((g,i,a)=>{const o={name:g.name,q:g.q,h:Math.round(i*360/a.length+8)%360,d:i+3,m:i%2};o.fb=cover(o);o.cover="/api/img/genre/"+encodeURIComponent(g.name);return o});
 function useGenres(){const[g,setG]=useState(()=>genreMap({genres:GENRE_FALLBACK.map(([name,q])=>({name,q}))}));
  useEffect(()=>{let off=false;fetch("/api/genres").then(r=>r.ok?r.json():null).then(j=>{if(!off&&j&&j.genres&&j.genres.length)setG(genreMap(j))}).catch(()=>{});return()=>{off=true}},[]);return g}
-function Search({play,onDir,cur}){const genres=useGenres(),[q,setQ]=useState(""),s=q.trim(),P=usePages(s.length>=2?s:"",null,true);
+function Search({play,onDir,cur,initQ}){const genres=useGenres(),[q,setQ]=useState(initQ||""),s=q.trim(),P=usePages(s.length>=2?s:"",null,true);
  return h(Screen,{title:"Search",right:h(Av),onDir},
   h("div",{className:"search rise",style:{"--d":1}},Ic("search"),h("input",{value:q,placeholder:"Artists, Songs…",onChange:e=>setQ(e.target.value)})),
   s.length>=2?(P.items.length?h(React.Fragment,null,TrackList(P.items,play,cur),h(PageMore,{P})):P.busy?h(Loader):P.err?Empty("Search failed. Check your connection and try again."):Empty("No results."))
@@ -332,14 +350,14 @@ function Sheet({open,setOpen,cur,pl,toggle,go,tm,onPlaylist}){
 
 function App(){
  const ctx=useContext(UserCtx),notify=ctx&&ctx.notify?ctx.notify:()=>{};
- const[more,setMore]=useState(null),[tab,setTab]=useState(0),[cur,setCur]=useState(null),[pl,setPl]=useState(false),[open,setOpen]=useState(false),[col,setCol]=useState(false),[tm,setTm]=useState({t:0,d:0}),[plFor,setPlFor]=useState(null);
+ const[more,setMore]=useState(null),[sq,setSq]=useState({q:"",n:0}),[tab,setTab]=useState(0),[cur,setCur]=useState(null),[pl,setPl]=useState(false),[open,setOpen]=useState(false),[col,setCol]=useState(false),[tm,setTm]=useState({t:0,d:0}),[plFor,setPlFor]=useState(null);
  const cr=useRef(null),Q=useRef([]);
  useEffect(()=>{au.onplay=()=>setPl(true);au.onpause=()=>setPl(false);const upd=()=>setTm({t:au.currentTime||0,d:durOf()});
   au.ontimeupdate=upd;au.onloadedmetadata=upd;au.ondurationchange=upd;au.onseeked=upd;
   au.onended=()=>{const c=cr.current;if(!c||c.live)return;if(REP.id===c.id){au.currentTime=0;au.play().catch(()=>{});return}go(1)};
-  au.onerror=()=>{const c=cr.current;if(c&&!c.live&&PT.retry!==c.id){PT.retry=c.id;delete LINKS[c.id];startTrack(c);return}setPl(false);if(c)notify("Couldn’t play “"+c.t+"”")}},[]);
+  au.onerror=()=>{const c=cr.current;if(c&&!c.live){if(PT.id!==c.id){PT.id=c.id;PT.tries=0}if(PT.tries<3){PT.tries++;delete LINKS[c.id];setTimeout(()=>{if(cr.current&&cr.current.id===c.id)startTrack(c,true)},PT.tries*600);return}}setPl(false);if(c)notify("Couldn’t play “"+c.t+"”")}},[]);
  useEffect(()=>()=>{au.pause()},[]);
- useEffect(()=>{ACT.pl=setPlFor;ACT.note=notify;ACT.more=setMore;return()=>{ACT.pl=()=>{};ACT.note=()=>{};ACT.more=()=>{}}});
+ useEffect(()=>{ACT.pl=setPlFor;ACT.note=notify;ACT.more=setMore;ACT.search=q=>{setSq({q,n:Date.now()});setTab(3);setCol(false);setMore(null)};return()=>{ACT.pl=()=>{};ACT.note=()=>{};ACT.more=()=>{};ACT.search=()=>{}}});
  useEffect(()=>{const k=e=>{const t=e.target.tagName;if(t==="INPUT"&&e.target.type!=="range")return;
   if(e.key==="Escape")setOpen(false);
   else if(e.code==="Space"&&t!=="BUTTON"){e.preventDefault();toggle()}};
@@ -364,7 +382,7 @@ function App(){
  const goTab=i=>{setTab(i);setCol(false);setMore(null)};
  const S=[Home,Radio,Library,Search][tab];
  return h("div",{className:"app"},
-  h(S,{key:tab,...pr}),
+  h(S,{key:tab===3?"3|"+sq.n:tab,...pr,initQ:tab===3?sq.q:undefined}),
   more&&h(MoreView,{key:more.title+"|"+more.q,...more,play,cur,onDir:setCol,onClose:()=>setMore(null)}),
   h("div",{className:"dock"+(col?" col":"")},
    h("button",{className:"side l circ press",onClick:()=>goTab(0),"aria-label":"Home"},Ic("home")),

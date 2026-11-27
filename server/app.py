@@ -104,12 +104,12 @@ def track_url(tid, u=None):
     return None
 
 
-def _need(tid, u):
+def _need(tid, u, fresh=False):
     url = track_url(tid, u)
     if not url:
         raise HTTPException(404, "unknown track")
     try:
-        return url, scraper.resolve(url)
+        return url, scraper.resolve(url, fresh)
     except Exception as e:
         log.warning("resolve failed %s: %s", url, e)
         raise HTTPException(502, "could not get a stream for this track")
@@ -414,12 +414,12 @@ def api_recommend(b: RecIn):
 
 
 @app.get("/api/link/{tid}")
-def api_link(tid: str, u: str | None = None):
+def api_link(tid: str, u: str | None = None, fresh: int = 0):
     """The server only RESOLVES the direct CDN link; the browser fetches/plays the audio itself.
     hls=true -> m3u8 playlist that the browser plays with hls.js (Safari plays it natively)."""
-    _, info = _need(tid, u)
+    _, info = _need(tid, u, bool(fresh))
     return JSONResponse({"url": info["url"], "hls": not info["progressive"], "ext": info["ext"] if info["progressive"] else "mp3"},
-                        headers={"Cache-Control": "private, max-age=600"})
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/stream/{tid}")

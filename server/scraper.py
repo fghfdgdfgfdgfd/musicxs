@@ -113,8 +113,10 @@ _locks = {}
 _locks_guard = threading.Lock()
 
 
-def resolve(url):
+def resolve(url, fresh=False):
     now = time.time()
+    if fresh:
+        _cache.pop(url, None)
     c = _cache.get(url)
     if c and c[0] > now:
         return c[1]
@@ -128,16 +130,25 @@ def resolve(url):
 
 
 def _resolve(url, now):
-    with SEM:
-        with yt_dlp.YoutubeDL(_opts(format="bestaudio[protocol=https]/bestaudio[protocol=http]/bestaudio/best")) as y:
-            i = y.extract_info(url, download=False)
+    last = None
+    for attempt in range(3):  # SoundCloud sometimes fails once (rate limit / rotated client_id): retry before giving up
+        try:
+            with SEM:
+                with yt_dlp.YoutubeDL(_opts(format="bestaudio[protocol=https]/bestaudio[protocol=http]/bestaudio/best")) as y:
+                    i = y.extract_info(url, download=False)
+            break
+        except Exception as e:
+            last = e
+            time.sleep(0.7 * (attempt + 1))
+    else:
+        raise last
     info = {"url": i["url"], "ext": i.get("ext") or "mp3",
             "progressive": i.get("protocol") in ("https", "http"),
             "acodec": i.get("acodec") or ""}
     if len(_cache) > 400:
         for k in [k for k, v in _cache.items() if v[0] < now]:
             _cache.pop(k, None)
-    _cache[url] = (now + 1200, info)
+    _cache[url] = (now + 600, info)
     return info
 
 
